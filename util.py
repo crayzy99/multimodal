@@ -21,7 +21,7 @@ def get_activation(activation):
         return nn.Tanh()
 
 class En_De:
-    def __init__(self, data_path, types):
+    def __init__(self, data_path, types, image_feature_dir):
         self.src = []
         self.tgt = []
         for t in types:

@@ -11,146 +11,83 @@ from vist import VIST
 
 
 class Flickr30k(data.Dataset):
-    def __init__(self, image_dir, sis_path, vocab, type):
-        self.image_dir = image_dir
-        self.vocab = vocab
-        self.image_features = pickle.load(open(image_dir, 'rb'))
+    def __init__(self, image_feature_dir, data_path, type, src_vocab, tgt_vocab):
+        self.image_feature_dir = ''
+        self.src_vocab = src_vocab
+        self.tgt_vocab = tgt_vocab
+        self.src = []
+        self.tgt = []
+        if type == 'test':
+            src_file = data_path + type + '_2016_flickr.lc.norm.tok.en'
+            tgt_file = data_path + type + '_2016_flickr.lc.norm.tok.de'
+            self.image_feature_dir = image_feature_dir + t + '_2016_flickr-resnet50-avgpool.npy'
+        else:
+            src_file = data_path + type + '.lc.norm.tok.en'
+            tgt_file = data_path + type + '.lc.norm.tok.de'
+            self.image_feature_dir = image_feature_dir + t + '-resnet50-avgpool.npy'
+        with open(src_file, 'rb') as f:
+            self.src += f.readlines()
+        with open(tgt_file, 'rb') as f:
+            self.tgt += f.readlines()
+
+        self.image_features = np.load(self.image_feature_dir)
+
+        print('First line in src_file:', self.src[0])
+        print('First line in tgt_file:', self.tgt[0])
+        print('Image feature size:', self.image_features.shape)
 
     def __getitem__(self, index):
-        vist = self.vist
-        vocab = self.vocab
-        #story_id = self.ids[index]
+        src_vocab = self.src_vocab
+        tgt_vocab = self.tgt_vocab
+        src = self.src
+        tgt = self.tgt
+        image_features = self.image_features
 
-        targets = []
-        images = []
-        photo_sequence = []
-        album_ids = []
+        src_sent = src[index]
+        tgt_sent = tgt[index]
+        source = []
+        target = []
+        image_feature = image_features[index]
 
-        story = vist.stories[index]
-        image_ids = vist.images[index]
-        for id in image_ids:
-            images.append(torch.Tensor(self.image_features[id]))
-            photo_sequence.append(id)
-        for annotation in story:
-            tokens = annotation.split(' ')
-            caption = []
-            caption.append(vocab('<start>'))
-            caption.extend([vocab(token) for token in tokens])
-            caption.append(vocab('<end>'))
-            target = torch.Tensor(caption)
-            targets.append(target)
+        src_tokens = src_sent.split()
+        source.append(src_vocab(b'<start>'))
+        source.extend([src_vocab(token) for token in src_tokens])
+        source.append(src_vocab(b'<end>'))
+        source = torch.Tensor(source)
 
-        # story = vist.stories[story_id]
-        # image_formats = ['.jpg', '.gif', '.png', '.bmp']
-        # for annotation in story:
-        #     storylet_id = annotation["storylet_id"]
-        #     image = Image.new('RGB', (256, 256))
-        #     image_id = annotation["photo_flickr_id"]
-        #     photo_sequence.append(image_id)
-        #     album_ids.append(annotation["album_id"])
-        #     for image_format in image_formats:
-        #         try:
-        #             image = Image.open(os.path.join(self.image_dir, str(image_id) + image_format)).convert('RGB')
-        #         except Exception:
-        #             continue
-        #
-        #     if self.transform is not None:
-        #         image = self.transform(image)
-        #
-        #     images.append(image)
-        #
-        #     text = annotation["text"]
-        #     tokens = []
-        #     try:
-        #         tokens = nltk.tokenize.word_tokenize(text.lower())
-        #     except Exception:
-        #         pass
-        #
-        #     caption = []
-        #     caption.append(vocab('<start>'))
-        #     caption.extend([vocab(token) for token in tokens])
-        #     caption.append(vocab('<end>'))
-        #     target = torch.Tensor(caption)
-        #     targets.append(target)
+        tgt_tokens = tgt_sent.split()
+        target.append(tgt_vocab(b'<start>'))
+        target.extend([tgt_vocab(token) for token in tgt_tokens])
+        target.append(tgt_vocab(b'<end>'))
+        target = torch.Tensor(target)
 
-        return torch.stack(images), targets, photo_sequence, album_ids
-
+        return source, target, image_feature
 
     def __len__(self):
         return len(self.vist.stories)
 
-    def GetItem(self, index):
-        vist = self.vist
-        vocab = self.vocab
-        story_id = self.ids[index]
-
-        targets = []
-        images = []
-        photo_sequence = []
-        album_ids = []
-
-        story = vist.stories[story_id]
-        image_formats = ['.jpg', '.gif', '.png', '.bmp']
-        for annotation in story:
-            storylet_id = annotation["storylet_id"]
-            image = Image.new('RGB', (256, 256))
-            image_id = annotation["photo_flickr_id"]
-            photo_sequence.append(image_id)
-            album_ids.append(annotation["album_id"])
-            for image_format in image_formats:
-                try:
-                    image = Image.open(os.path.join(self.image_dir, image_id + image_format)).convert('RGB')
-                    break
-                except Exception:
-                    continue
-
-            if self.transform is not None:
-                image = self.transform(image)
-
-            images.append(image)
-
-            text = annotation["text"]
-            tokens = []
-            try:
-                tokens = nltk.tokenize.word_tokenize(text.lower())
-            except Exception:
-                pass
-
-            caption = []
-            caption.append(vocab('<start>'))
-            caption.extend([vocab(token) for token in tokens])
-            caption.append(vocab('<end>'))
-            target = torch.Tensor(caption)
-            targets.append(target)
-
-        return images, targets, photo_sequence, album_ids
-
-    def GetLength(self):
-        return len(self.ids)
-
 
 def collate_fn(data):
+    sources, targets, image_features = zip(*data)
+    src_lengths = [len(source) for source in sources]
+    sources_tensor = torch.zeros(len(sources), max(src_lengths)).long()
+    for i, source in enumerate(sources):
+        end = src_lengths[i]
+        sources_tensor[i, :end] = source
 
-    image_stories, caption_stories, photo_sequence_set, album_ids_set = zip(*data)
+    tgt_lengths = [len(target) for target in targets]
+    targets_tensor = torch.zeros(len(targets), max(tgt_lengths)).long()
+    for i, target in enumerate(targets):
+        end = tgt_lengths[i]
+        targets_tensor[i, :end] = target
 
-    targets_set = []
-    lengths_set = []
+    image_features = torch.stack(image_features, dim=0)
 
-    for captions in caption_stories:
-        lengths = [len(cap) for cap in captions]
-        targets = torch.zeros(len(captions), max(lengths)).long()
-        for i, cap in enumerate(captions):
-            end = lengths[i]
-            targets[i, :end] = cap[:end]
-
-        targets_set.append(targets)
-        lengths_set.append(lengths)
-
-    return image_stories, targets_set, lengths_set, photo_sequence_set, album_ids_set
+    return sources_tensor, targets_tensor, src_lengths, tgt_lengths, image_features
 
 
-def get_loader(root, sis_path, vocab, batch_size, shuffle, num_workers, type):
-    vist = VistDataset(image_dir=root, sis_path=sis_path, vocab=vocab, type=type)
+def get_loader(image_feature_dir, data_path, src_vocab, tgt_vocab, batch_size, type, shuffle):
+    dataset = Flickr30k(image_feature_dir, data_path, type, src_vocab, tgt_vocab)
 
-    data_loader = torch.utils.data.DataLoader(dataset=vist, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, collate_fn=collate_fn)
+    data_loader = data.DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle, collate_fn=collate_fn)
     return data_loader
