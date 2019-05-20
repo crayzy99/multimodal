@@ -2,11 +2,13 @@ import torch
 import torch.optim as optim
 import torch.nn as nn
 
-def get_optimizer(optimizer, lr, params):
+
+def get_optimizer(optimizer, lr, params, weight_decay):
     if optimizer == 'sgd':
-        return optim.SGD(params, lr, momentum=0.9)
+        return optim.SGD(params, lr, momentum=0.9, weight_decay=weight_decay)
     elif optimizer == 'adam':
-        return optim.Adam(params, lr)
+        return optim.Adam(params, lr, weight_decay=weight_decay)
+
 
 def get_activation(activation):
     if not activation:
