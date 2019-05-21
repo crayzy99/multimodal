@@ -6,8 +6,7 @@ import pickle
 import numpy as np
 import nltk
 from PIL import Image
-from build_vocab import Vocabulary
-from vist import VIST
+from vocab import Vocabulary
 
 
 class Flickr30k(data.Dataset):
@@ -20,17 +19,29 @@ class Flickr30k(data.Dataset):
         if type == 'test':
             src_file = data_path + type + '_2016_flickr.lc.norm.tok.en'
             tgt_file = data_path + type + '_2016_flickr.lc.norm.tok.de'
-            self.image_feature_dir = image_feature_dir + t + '_2016_flickr-resnet50-avgpool.npy'
+            self.image_feature_dir = image_feature_dir + type + '_2016_flickr-resnet50-res4frelu.npy'
         else:
             src_file = data_path + type + '.lc.norm.tok.en'
             tgt_file = data_path + type + '.lc.norm.tok.de'
-            self.image_feature_dir = image_feature_dir + t + '-resnet50-avgpool.npy'
-        with open(src_file, 'rb') as f:
+            self.image_feature_dir = image_feature_dir + type + '-resnet50-res4frelu.npy'
+        with open(src_file, 'r', encoding='utf-8') as f:
             self.src += f.readlines()
-        with open(tgt_file, 'rb') as f:
+        with open(tgt_file, 'r', encoding='utf-8') as f:
             self.tgt += f.readlines()
 
+        for i, line in enumerate(self.tgt):
+            if line[-1] == '\n':
+                self.tgt[i] = line[:-1]
+
+        for i, line in enumerate(self.src):
+            if line[-1] == '\n':
+                self.src[i] = line[:-1]
+
         self.image_features = np.load(self.image_feature_dir)
+        im_shape = self.image_features.shape
+        image_features = torch.from_numpy(self.image_features).float()
+        image_features = torch.transpose(image_features.view(im_shape[0], im_shape[1], -1), 1, 2)
+        self.image_features = image_features
 
         print('First line in src_file:', self.src[0])
         print('First line in tgt_file:', self.tgt[0])
@@ -64,7 +75,7 @@ class Flickr30k(data.Dataset):
         return source, target, image_feature
 
     def __len__(self):
-        return len(self.vist.stories)
+        return len(self.image_features)
 
 
 def collate_fn(data):

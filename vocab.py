@@ -26,7 +26,7 @@ class Vocabulary(object):
 
 
 def build_vocab(data_path, threshold):
-    en_de = En_De(data_path, types=['train', 'valid', 'test'])
+    en_de = En_De(data_path, types=['train', 'val', 'test'], image_feature_dir=args.image_feature_dir)
     src_counter = Counter()
     tgt_counter = Counter()
 
@@ -87,6 +87,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_path', type=str, default='../task1/tok/')
     parser.add_argument('--src_vocab_path', type=str, default='./models/src_vocab.pkl')
+    parser.add_argument('--image_feature_dir', type=str, default='../features_resnet50/')
     parser.add_argument('--tgt_vocab_path', type=str, default='./models/tgt_vocab.pkl')
     parser.add_argument('--threshold', type=int, default=3)
     args = parser.parse_args()

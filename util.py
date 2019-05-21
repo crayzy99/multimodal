@@ -22,6 +22,7 @@ def get_activation(activation):
     elif activation == 'tanh':
         return nn.Tanh()
 
+
 class En_De:
     def __init__(self, data_path, types, image_feature_dir):
         self.src = []
@@ -33,9 +34,9 @@ class En_De:
             else:
                 src_file = data_path + t + '.lc.norm.tok.en'
                 tgt_file = data_path + t + '.lc.norm.tok.de'
-            with open(src_file, 'rb') as f:
+            with open(src_file, 'r', encoding='utf-8') as f:
                 self.src += f.readlines()
-            with open(tgt_file, 'rb') as f:
+            with open(tgt_file, 'r', encoding='utf-8') as f:
                 self.tgt += f.readlines()
 
         for i, line in enumerate(self.tgt):

@@ -8,7 +8,7 @@ import numpy as np
 from data_loader import get_loader
 from vocab import Vocabulary
 from util import *
-from model import Encoder, AttnDecoder_1_1
+from model import Encoder, AttnDecoder_1
 import os
 import pickle
 
@@ -36,10 +36,7 @@ def main(args):
     train_data_loader = get_loader(args.image_feature_dir, args.data_path, src_vocab, tgt_vocab,
                                    batch_size=args.batch_size, type='train', shuffle=True)
     val_data_loader = get_loader(args.image_feature_dir, args.data_path, src_vocab, tgt_vocab,
-                                 batch_size=args.batch_size, type='valid', shuffle=True)
-
-    encoder = Encoder(args.embed_size, args.encoder_hidden_size, src_vocab, num_layers=args.num_layers)
-    decoder = AttnDecoder_1(args.embed_size, args.decoder_hidden_size, tgt_vocab, args.image_size)
+                                 batch_size=args.batch_size, type='val', shuffle=True)
 
     def count_parameters(model):
         return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -81,6 +78,7 @@ def main(args):
             try:
                 sources = sources.to(device)
                 targets = targets.to(device)
+                image_features = image_features.to(device)
                 encoder_output = encoder(sources)
                 output, tgt_output = decoder(encoder_output, image_features, targets)
                 output = output.contiguous().view(-1, output.shape[-1])
@@ -88,7 +86,7 @@ def main(args):
                 loss += criterion(output, tgt_output)
 
                 avg_loss += loss.item()
-                loss /= args.batch_size
+                #loss /= args.batch_size
                 loss.backward()
                 nn.utils.clip_grad_norm_(params, args.clip)
                 optimizer.step()
@@ -105,7 +103,7 @@ def main(args):
                       %(epoch + 1, args.num_epochs, bi, total_train_step,
                         loss.item(), np.exp(loss.item())))
 
-            # if bi >= total_train_step:
+            # if bi >= 20:
             #     break
 
         avg_loss /= total_train_step
@@ -122,16 +120,17 @@ def main(args):
         for bi, (sources, targets, src_lengths, tgt_lengths, image_features) in enumerate(val_data_loader):
             sources = sources.to(device)
             targets = targets.to(device)
+            image_features = image_features.to(device)
             loss = 0.0
             try:
-                output= encoder(sources)
-                output, tgt_output = decoder(output, targets)
+                encoder_output = encoder(sources)
+                output, tgt_output = decoder(encoder_output, image_features, targets)
                 output = output.contiguous().view(-1, output.shape[-1])
                 tgt_output = tgt_output.contiguous().view(-1)
                 loss += criterion(output, tgt_output)
 
                 avg_loss += loss.item()
-                loss /= args.batch_size
+                #loss /= args.batch_size
             except RuntimeError as exception:
                 if "out of memory" in str(exception):
                     print("WARNING: out of memory")
@@ -171,7 +170,7 @@ if __name__ == '__main__':
     parser.add_argument('--embed_size', type=int, default=620)
     parser.add_argument('--encoder_hidden_size', type=int, default=500)
     parser.add_argument('--decoder_hidden_size', type=int, default=1000)
-    parser.add_argument('--image_feature_size', type=int, default=2048)
+    parser.add_argument('--image_feature_size', type=int, default=1024)
     parser.add_argument('--num_layers', type=int, default=2)
     parser.add_argument('--embedding_dropout', type=float, default=0.4)
     parser.add_argument('--output_dropout', type=float, default=0.5)
@@ -181,7 +180,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--pretrained_epoch', type=int, default=0)
     parser.add_argument('--num_epochs', type=int, default=100)
-    parser.add_argument('--batch_size', type=int, default=64)
+    parser.add_argument('--batch_size', type=int, default=2)
     parser.add_argument('--learning_rate', type=float, default=0.001)
     parser.add_argument('--cuda_num', type=int, default=0)
     args = parser.parse_args()
