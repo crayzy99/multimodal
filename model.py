@@ -2,6 +2,8 @@
 import torch
 import torch.nn as nn
 import torchnlp.nn as nlpnn
+from collections import OrderedDict
+from operator import itemgetter
 
 
 class Encoder(nn.Module):
@@ -62,7 +64,7 @@ class AttnDecoder_1(nn.Module):
         self.dropout = nn.Dropout(0.5)
         self.tanh = nn.Tanh()
         self.init_map = nn.Linear(hidden_size, hidden_size)
-        self.softmax = nn.Softmax(2)
+        self.softmax = nn.Softmax(0)
 
     def get_params(self):
         params = list(self.decoder_1.parameters()) + list(self.decoder_2.parameters()) +\
@@ -119,7 +121,7 @@ class AttnDecoder_1(nn.Module):
 
         return output, tgt_output
 
-    def sample(self, text_input, image_input, maxlen, ):
+    def sample(self, text_input, image_input, maxlen, beam_size=12):
         '''
         :param text_input: shape = (batch, src_max_len, hidden_size)
         :param image_input: size = (batch, image_len, image_size)
@@ -130,7 +132,6 @@ class AttnDecoder_1(nn.Module):
 
         vocab = self.vocab
         idx = torch.LongTensor([vocab(b'<start>')]).to(device)
-        input = self.embedding(idx).view(1,1,-1)
         h_1 = self.init_hidden(text_input)
         h_2 = self.init_hidden(text_input)
         batch_size = text_input.shape[0]
@@ -139,22 +140,54 @@ class AttnDecoder_1(nn.Module):
         text_hat = text_hat.contiguous()
         image_hat = image_hat.contiguous()
 
-        ans = []
-        while True:
-            decoder1_output, h_1 = self.decoder_1(input, h_1)  # (1, 1, hidden_size)
-            text_bar, _ = self.dec_txt_attention(decoder1_output, text_hat)  # shape = (1, 1, hidden_size)
-            image_bar, _ = self.dec_img_attention(decoder1_output, image_hat)
-            input_2 = self.h1toh2(torch.cat([text_bar, image_bar], dim=2))
-            decoder2_output, h_2 = self.decoder_2(input_2, h_2)
-            decoder2_output = decoder1_output.squeeze().squeeze()
-            max, id = torch.max(decoder2_output, 0)
-            ans.append(id)
-            if vocab.idx2word[id.item()] == b'<end>':
-                ans = ans[:-1]
-                break
-            if len(ans) >= maxlen:
-                break
-            input = self.embedding(id).view(1,1,-1)
+        # beam search的思路：一个字典保存之前的path->log概率，一个tensor存每个beam的previous hidden state,
 
-        ans = torch.stack(ans, 0)
+        prev_paths = [[([idx], h_1, h_2), 1.0]]
+        new_paths = []
+        hidden_size = self.hidden_size
+        end_vocab = vocab('<end>')
+        forbidden_list = [vocab('<pad>'), vocab('<start>'), vocab('<unk>')]
+        termination_list = [vocab('.'), vocab('?'), vocab('!')]
+        function_list = [vocab('<end>'), vocab('.'), vocab('?'), vocab('!'), vocab('a'), vocab('an'), vocab('am'),
+                         vocab('is'), vocab('was'), vocab('are'), vocab('were'), vocab('do'), vocab('does'),
+                         vocab('did')]
+
+        ans = []
+        step = 0
+        while step <= maxlen:
+
+            # beam search
+            for i, prev_ in enumerate(prev_paths):
+                prev_condition = prev_[0]
+                prob = prev_[1]
+                prev_path, h_1, h_2 = prev_condition
+                last_word_idx = prev_path[-1]
+                if last_word_idx == end_vocab:
+                    new_paths.append(prev_paths[i])
+                    break
+                input = self.embedding(last_word_idx).view(1,1,-1)
+                decoder1_output, h_1 = self.decoder_1(input, h_1)
+                text_bar, _ = self.dec_txt_attention(decoder1_output, text_hat)  # shape = (1, 1, hidden_size)
+                image_bar, _ = self.dec_img_attention(decoder1_output, image_hat)
+                input_2 = self.h1toh2(torch.cat([text_bar, image_bar], dim=2))
+                decoder2_output, h_2 = self.decoder_2(input_2, h_2)
+                decoder2_output = decoder2_output.squeeze().squeeze()  # shape = (hidden_size,) 未经softmax
+                if last_word_idx not in termination_list:
+                    decoder2_output[end_vocab] = -1000.0
+
+                for forbidden in forbidden_list:
+                    decoder2_output[forbidden] = -1000.0
+
+                output_prob = self.softmax(decoder2_output)  # shape = (hidden_size,) prob_like
+                values, indices = torch.topk(output_prob, beam_size)
+                for ix in range(beam_size):
+                    new_paths.append([(prev_path+[indices[ix]], h_1, h_2), prob+torch.log(values[ix]+1e-6)])
+
+            # 现在new_paths里应该有beam_size**2个条目
+            sorted_paths = sorted(new_paths, key=itemgetter(1))
+            prev_paths = sorted_paths[:beam_size]
+            new_paths = []
+
+        assert len(prev_paths) > 0
+        ans = prev_paths[0][0][0]
         return ans

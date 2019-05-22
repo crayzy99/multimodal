@@ -80,11 +80,10 @@ for bi, (sources, targets, src_lengths, tgt_lengths, image_features) in enumerat
     targets = targets.to(device)
     image_features = image_features.to(device)
     encoder_output = encoder(sources)
-    output = decoder.sample(encoder_output, image_features, args.maxlen)
+    output = decoder.sample(encoder_output, image_features, args.maxlen)  # output有<start>和<end>，且是tensor的list
     ans = ''
-    for i, id in enumerate(output):
+    for i, id in enumerate(output[1:-1]):
         ans += tgt_vocab.idx2word[id.item()].decode() + ' '
-    ans = ans[:-1]
     results.append(ans)
 
 with open(args.result_path, 'w') as f:
