@@ -1,7 +1,7 @@
 import pickle
 import argparse
 from collections import Counter
-from util import En_De
+from util import *
 
 
 class Vocabulary(object):
@@ -25,8 +25,9 @@ class Vocabulary(object):
         return len(self.word2idx)
 
 
-def build_vocab(data_path, threshold):
-    en_de = En_De(data_path, types=['train', 'val', 'test'], image_feature_dir=args.image_feature_dir)
+def build_vocab(data_path, threshold, src_language, tgt_language):
+    raw_data = RawDataset(data_path, types=['train', 'val', 'test'],
+                          src_language=src_language, tgt_language=tgt_language)
     src_counter = Counter()
     tgt_counter = Counter()
 
@@ -69,7 +70,7 @@ def build_vocab(data_path, threshold):
 
 
 def main(args):
-    src_vocab, tgt_vocab = build_vocab(data_path=args.data_path, threshold=args.threshold)
+    src_vocab, tgt_vocab = build_vocab(args.data_path, args.threshold, args.src_language, args.tgt_language)
     src_vocab_path = args.src_vocab_path
     tgt_vocab_path = args.tgt_vocab_path
     with open(src_vocab_path, 'wb') as f:
@@ -90,5 +91,7 @@ if __name__ == '__main__':
     parser.add_argument('--image_feature_dir', type=str, default='../features_resnet50/')
     parser.add_argument('--tgt_vocab_path', type=str, default='./models/tgt_vocab.pkl')
     parser.add_argument('--threshold', type=int, default=3)
+    parser.add_argument('--src_language', type=str, default='en')
+    parser.add_argument('--tgt_language', type=str, default='de')
     args = parser.parse_args()
     main(args)

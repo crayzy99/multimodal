@@ -6,36 +6,231 @@ from collections import OrderedDict
 from operator import itemgetter
 
 
-class Encoder(nn.Module):
-    def __init__(self, embed_size, hidden_size, vocab, embed_dropout_rate=0.4, output_dropout_rate=0.5,
+class EncoderGRU(nn.Module):
+    ## 一个简单的LSTM模型
+    ## 可能的改进方向：加入BPE或者german compound word splitting.
+    def __init__(self, embed_size, hidden_size, vocab, embedding, embed_dropout_rate=0.4, output_dropout_rate=0.5,
                  num_layers=1):
-        super(Encoder, self).__init__()
+        super(EncoderGRU, self).__init__()
 
         self.embed_size = embed_size
-        self.hidden_size = hidden_size  # 400
+        self.hidden_size = hidden_size
         self.vocab_size = len(vocab)
-        self.embedding = nn.Embedding(self.vocab_size, embed_size)
+        self.embedding = embedding
         self.embedding.weight.requires_grad = False
-        self.encoder = nn.GRU(embed_size, hidden_size,
-                               batch_first=True, num_layers=num_layers, bidirectional=True)
+        self.gru = nn.GRU(embed_size, hidden_size,
+                              num_layers=num_layers, bidirectional=True)
         self.embedding_dropout = nn.Dropout(embed_dropout_rate)
         self.output_dropout = nn.Dropout(output_dropout_rate)
 
     def get_params(self):
-        return list(self.encoder.parameters())
+        return list(self.gru.parameters())
 
-    def forward(self, src):
+    def forward(self, src, src_lengths, hidden=None):
         '''
-        :param src: size = (batch, src_max_len), dtype=long
-        :param tgt: size = (batch, tgt_max_len), dtype=long
-        :return: output: size = (batch, max_len, num_direction*hidden_size)
+        :param src: size = (src_max_len, batch), dtype=long
+        :param src_lengths: size = (batch), batch中每一句的长度
+        :return: output: size = (src_max_len, batch, hidden_size), 双向输出之和
+        :return: hidden: size = (num_layers * num_directions, batch, hidden_size), 最后一个token的隐藏层
         '''
-        embed = self.embedding(src)
-        embed = self.embedding_dropout(embed)
-        output, h_n = self.encoder(embed)  # (batch, seq_len, num_layers*hidden_size)
-        output = self.output_dropout(output)
+        embedded = self.embedding(src)
+        packed = nn.utils.rnn.pack_padded_sequence(embedded, src_lengths)
+        outputs, hidden = self.gru(packed, hidden)
+        outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs)
+        outputs = outputs[:, :, :self.hidden_size] + outputs[:, : ,self.hidden_size:]
 
-        return output
+        outputs = self.output_dropout(outputs)
+
+        return outputs, hidden
+
+class LuongAttention(nn.Module):
+    ## 这里考虑decoding中每一步分别执行attention，所以用来做attention的decoder_output为[1, batch, hidden_size]
+
+    def __init__(self, method, hidden_size):
+        super(LuongAttention, self).__init__()
+        self.method = method
+        self.hidden_size = hidden_size
+        if method == 'general':
+            self.attn = nn.Linear(hidden_size, hidden_size)
+        elif method == 'concat':
+            self.attn = nn.Linear(2*hidden_size, hidden_size)
+            self.v = nn.Parameter(torch.FloatTensor(hidden_size))
+
+    def dot_score(self, hidden, encoder_output):
+        '''
+        :param hidden: size = (1, batch, hidden_size)
+        :param encoder_output: size = (src_max_len, batch, hidden_size)
+        :return: size = (src_max_len, batch), 其中第0维为source句子每一个token对应的attentionscore
+        下面两个函数的参数和输出相同
+        '''
+        return torch.sum(hidden *  encoder_output, dim=2)
+
+    def general_score(self, hidden, encoder_output):
+        energy = self.attn(encoder_output)
+        return torch.sum(hidden * energy, dim=2)
+
+    def concat_score(self, hidden, encoder_output):
+        energy = self.attn(torch.cat((hidden.expand(encoder_output.size(0), -1, -1), encoder_output), 2)).tanh()
+        return torch.sum(self.v * energy, dim=2)
+
+    def forward(self, hidden, encoder_outputs):
+        # Calculate the attention weights (energies) based on the given method
+        if self.method == 'general':
+            attn_energies = self.general_score(hidden, encoder_outputs)
+        elif self.method == 'concat':
+            attn_energies = self.concat_score(hidden, encoder_outputs)
+        elif self.method == 'dot':
+            attn_energies = self.dot_score(hidden, encoder_outputs)
+
+        # Transpose max_length and batch_size dimensions
+        attn_energies = attn_energies.t()  ## (batch, src_max_len)
+
+        # Return the softmax normalized probability scores (with added dimension)
+        return F.softmax(attn_energies, dim=1).unsqueeze(1)  ## (batch, 1, src_max_len), 后续使用需要再进行一次transpose
+
+
+class TextAttnDecoderGRU(nn.Module):
+    ## 不考虑图片输入的Attention Decoder. Attention采用Luong提出的方法.
+    def __init__(self, attn_model, embedding, hidden_size, output_size, n_layers=1, dropout=0):
+        '''
+        :param attn_model: is in ['dot', 'general', 'concat']
+        :param embedding: 应该是目标语言
+        :param output_size: 即目标语言的vocab_size
+        '''
+        super(TextAttnDecoder, self).__init__()
+        # Keep for reference
+        self.attn_model = attn_model
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        self.n_layers = n_layers
+        self.dropout = dropout
+        # Define layers
+        self.embedding = embedding
+        self.embedding_dropout = nn.Dropout(dropout)
+        self.gru = nn.GRU(hidden_size, hidden_size, n_layers, dropout=(0 if n_layers == 1 else dropout))
+        self.concat = nn.Linear(hidden_size * 2, hidden_size)
+        self.out = nn.Linear(hidden_size, output_size)
+
+        self.attn = Attn(attn_model, hidden_size)
+
+    def forward(self, input, last_hidden, encoder_outputs):
+        '''
+        :param input: size = (1, batch) 某一时刻的输入
+        :param last_hidden: size = (num_layers * num_directions, batch, hidden_size)
+        :param encoder_outputs: size = (tgt_max_len, batch, hidden_size)
+        :return output: size = (batch, output_size), prob_like
+        :return hidden: size = (n_layers * num_directions, batch, hidden_size)
+        '''
+
+        embedded = self.embedding(input)
+        embedded = self.embedding_dropout(embedded)
+        output, hidden = self.gru(embedded, last_hidden)  ## output: size = (1, batch, hidden_size)
+        attn_weights = self.attn(output, encoder_outputs)  ## size = (batch, 1, hidden_size)
+        context = attn_weights.bmm(encoder_outputs.transpose(0,1))  ## size = (batch, 1, hidden)
+        output = output.squeeze(0)  ## size = (batch, hidden_size)
+        context = context.squeeze(1)  ## size = (batch, hidden)
+        concat_input = torch.cat((output, context), 1)
+        concat_output = self.concat(concat_input)
+        output = self.out(concat_output)
+        output = F.softmax(output, dim=1)
+
+        return output, hidden
+
+
+class GreedySearchDecoder(nn.Module):
+    def __init__(self, encoder, decoder, tgt_vocab):
+        super(GreedySearchDecoder, self).__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+        self.vocab = tgt_vocab
+
+    def forward(self, input_seq, input_length, max_length):
+        '''
+        :param input_seq: size = (input_length, 1)
+        :param input_length: scalar
+        :param max_length: scalar
+        :return: all_tokens: size = (max_length, batch)
+        '''
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        encoder_outputs, encoder_hidden = self.encoder(input_seq, input_length)
+        decoder_hidden = encoder_hidden[:decoder.n_layers]
+        decoder_input = torch.ones(1, 1, device=device, dtype=torch.long) * tgt_vocab('b<start>')
+        all_tokens = torch.zero([0], device=device, dtype=torch.long)
+        all_scores = torch.zeros([0], device=device)
+        for _ in range(max_length):
+            decoder_output, decoder_hidden = self.decoder(decoder_input, decoder_hidden, encoder_outputs)
+            decoder_scores, decoder_input = torch.max(decoder_output, dim=1)
+            all_tokens = torch.cat((all_tokens, decoder_input), dim=0)
+            all_scores = torch.cat((all_scores, decoder_scores), dim=0)
+            decoder_input = torch.unsqueeze(decoder_input, 0)
+
+        return all_tokens, all_scores
+
+
+class BeamSearchDecoder(nn.Module):
+    def __init__(self, encoder, decoder, tgt_vocab, beam_size):
+        super(BeamSearchDecoder, self).__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+        self.vocab = tgt_vocab
+        self.beam_size = beam_size
+
+    def forward(self, input_seq, input_length, max_length):
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        encoder_outputs, encoder_hidden = self.encoder(input_seq, input_length)
+        decoder_hidden = encoder_hidden[:decoder.n_layers]
+        decoder_input = torch.ones(1, 1, device=device, dtype=torch.long) * tgt_vocab('b<start>')
+        # beam search的思路：一个字典保存之前的path->log概率，一个tensor存每个beam的previous hidden state,
+
+        # prev_paths保存目前概率最高的k个path（初始只有一个）. 列表元素有两个，第一个是一个tuple保存路径（也是一个列表）以及
+        # 生成下一个token所需的hidden_state
+        prev_paths = [[([idx], decoder_hidden), 1.0]]
+        # new_paths保存下一个token可能的情况，计算完成后将会有k**2个条目，
+        new_paths = []
+        hidden_size = self.hidden_size
+        end_vocab = vocab('<end>')
+        forbidden_list = [vocab('<pad>'), vocab('<start>'), vocab('<unk>')]
+        termination_list = [vocab('.'), vocab('?'), vocab('!')]
+        function_list = [vocab('<end>'), vocab('.'), vocab('?'), vocab('!'), vocab('a'), vocab('an'), vocab('am'),
+                         vocab('is'), vocab('was'), vocab('are'), vocab('were'), vocab('do'), vocab('does'),
+                         vocab('did')]
+
+        step = 0
+        while step <= max_length:
+            # beam search
+            for i, prev_ in enumerate(prev_paths):
+                prev_condition = prev_[0]  ## 也就是之前的path和当前hidden state
+                prob = prev_[1]  # 当前path概率
+                prev_path, h_1, h_2 = prev_condition
+                last_word_idx = prev_path[-1]
+                # 如果path中的上一个token是eof，直接break
+                if last_word_idx == end_vocab:
+                    new_paths.append(prev_paths[i])
+                    break
+                # 过decoder
+                decoder_output, decoder_hidden = self.decoder(decoder_input, decoder_hidden, encoder_outputs)
+                decoder_output = decoder_output.squeeze().squeeze()  # shape = (hidden_size,) 未经softmax
+                assert decoder_output.shape == (hidden_size,)
+                # 如果上一个词不是终止token（标点符号），则禁止输出eof
+                if last_word_idx not in termination_list:
+                    decoder_output[end_vocab] = -1000.0
+                # 禁止输出fobidden tokens
+                for forbidden in forbidden_list:
+                    decoder_output[forbidden] = -1000.0
+
+                output_prob = self.softmax(decoder_output)  # shape = (hidden_size,) prob_like
+                values, indices = torch.topk(output_prob, beam_size)
+                for ix in range(beam_size):
+                    new_paths.append([(prev_path + [indices[ix]], decoder_hidden), prob + torch.log(values[ix] + 1e-6)])
+
+            # 现在new_paths里应该有beam_size**2个条目
+            sorted_paths = sorted(new_paths, key=itemgetter(1))
+            prev_paths = sorted_paths[:beam_size]
+            new_paths = []
+
+        assert len(prev_paths) > 0
+        ans = prev_paths[0][0][0]
+        return ans
 
 
 class AttnDecoder_1(nn.Module):
@@ -142,7 +337,10 @@ class AttnDecoder_1(nn.Module):
 
         # beam search的思路：一个字典保存之前的path->log概率，一个tensor存每个beam的previous hidden state,
 
+        # prev_paths保存目前概率最高的k个path（初始只有一个）. 列表元素有两个，第一个是一个tuple保存路径（也是一个列表）以及
+        # 生成下一个token所需的hidden_state
         prev_paths = [[([idx], h_1, h_2), 1.0]]
+        # new_paths保存下一个token可能的情况，计算完成后将会有k**2个条目，
         new_paths = []
         hidden_size = self.hidden_size
         end_vocab = vocab('<end>')
@@ -152,19 +350,20 @@ class AttnDecoder_1(nn.Module):
                          vocab('is'), vocab('was'), vocab('are'), vocab('were'), vocab('do'), vocab('does'),
                          vocab('did')]
 
-        ans = []
         step = 0
         while step <= maxlen:
 
             # beam search
             for i, prev_ in enumerate(prev_paths):
-                prev_condition = prev_[0]
-                prob = prev_[1]
+                prev_condition = prev_[0]  ## 也就是之前的path和当前hidden state
+                prob = prev_[1]  # 当前path概率
                 prev_path, h_1, h_2 = prev_condition
                 last_word_idx = prev_path[-1]
+                # 如果path中的上一个token是eof，直接break
                 if last_word_idx == end_vocab:
                     new_paths.append(prev_paths[i])
                     break
+                # 过decoder
                 input = self.embedding(last_word_idx).view(1,1,-1)
                 decoder1_output, h_1 = self.decoder_1(input, h_1)
                 text_bar, _ = self.dec_txt_attention(decoder1_output, text_hat)  # shape = (1, 1, hidden_size)
@@ -172,9 +371,11 @@ class AttnDecoder_1(nn.Module):
                 input_2 = self.h1toh2(torch.cat([text_bar, image_bar], dim=2))
                 decoder2_output, h_2 = self.decoder_2(input_2, h_2)
                 decoder2_output = decoder2_output.squeeze().squeeze()  # shape = (hidden_size,) 未经softmax
+                assert decoder2_output.shape == (hidden_size,)
+                # 如果上一个词不是终止token（标点符号），则禁止输出eof
                 if last_word_idx not in termination_list:
                     decoder2_output[end_vocab] = -1000.0
-
+                # 禁止输出fobidden tokens
                 for forbidden in forbidden_list:
                     decoder2_output[forbidden] = -1000.0
 

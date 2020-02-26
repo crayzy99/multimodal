@@ -2,6 +2,7 @@ import torch
 import torch.optim as optim
 import torch.nn as nn
 
+device = torch.device("cuda" if USE_CUDA else "cpu")
 
 def get_optimizer(optimizer, lr, params, weight_decay):
     if optimizer == 'sgd':
@@ -23,17 +24,18 @@ def get_activation(activation):
         return nn.Tanh()
 
 
-class En_De:
-    def __init__(self, data_path, types, image_feature_dir):
+class RawDataset:
+    def __init__(self, data_path, types, src_language, tgt_language):
+        ## 此为构造词表所需，为方便起见把训练集也加入词表构建了
         self.src = []
         self.tgt = []
         for t in types:
             if t == 'test':
-                src_file = data_path + t + '_2016_flickr.lc.norm.tok.en'
-                tgt_file = data_path + t + '_2016_flickr.lc.norm.tok.de'
+                src_file = data_path + t + '_2016_flickr.lc.norm.tok.' + src_language
+                tgt_file = data_path + t + '_2016_flickr.lc.norm.tok.' + tgt_language
             else:
-                src_file = data_path + t + '.lc.norm.tok.en'
-                tgt_file = data_path + t + '.lc.norm.tok.de'
+                src_file = data_path + t + '.lc.norm.tok.' + src_language
+                tgt_file = data_path + t + '.lc.norm.tok.' + tgt_language
             with open(src_file, 'r', encoding='utf-8') as f:
                 self.src += f.readlines()
             with open(tgt_file, 'r', encoding='utf-8') as f:
@@ -46,3 +48,28 @@ class En_De:
         for i, line in enumerate(self.src):
             if line[-1] == '\n':
                 self.src[i] = line[:-1]
+
+def maskedNLLLoss(out, target, mask):
+    '''
+    :param out: size = (batch, output_size), prob_like
+    :param target: size = (batch), token index
+    :param mask: size = (batch), 0 or 1
+    :return: masked loss: size = (batch)
+    '''
+    nTotal = mask.sum()
+    crossEntropyLoss = -torch.log(torch.gather(out, 1, target.view(-1, 1)).squeeze(1))
+    loss = crossEntropyLoss.masked_select(mask).mean()
+    loss = loss.to(device)
+    return loss, nTotal
+
+def binaryMatrix(l, value=0):
+    m = []
+    for i, seq in enumerate(l):
+        m.append([])
+        for token in seq:
+            if token == value:
+                m[i].append(0)
+            else:
+                m[i].append(1)
+    return m
+
