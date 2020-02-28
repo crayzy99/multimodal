@@ -110,6 +110,8 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
     start_epoch = args.pretrained_epoch
     total_train_step = len(train_data_loader)
     total_val_step = len(val_data_loader)
+    min_avg_loss = float("inf")
+    overfit_warn = 0
     print('Start training...')
     for epoch in range(start_epoch, args.num_epochs+1):
         epoch_loss = 0
@@ -171,6 +173,12 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
         torch.save(encoder.state_dict(), os.path.join(args.model_path, 'encoder-%d.pkl' % (epoch + 1)))
         torch.save(decoder.state_dict(), os.path.join(args.model_path, 'decoder-%d.pkl' % (epoch + 1)))
 
+        overfit_warn = overfit_warn + 1 if (min_avg_loss < avg_loss) else 0
+        min_avg_loss = min(min_avg_loss, avg_loss)
+
+        if overfit_warn >= 10:
+            break
+
 
 def main(args):
     if not os.path.exists(args.model_path):
@@ -192,6 +200,7 @@ def main(args):
         src_embedding_sd = checkpoint['source_embedding']
         tgt_embedding_sd = checkpoint['target_embedding']
 
+    print('Building encoder and decoder...')
     src_embedding = nn.Embedding(len(src_vocab), args.embed_size)
     tgt_embedding = nn.Embedding(len(tgt_vocab), args.embed_size)
     if args.file_name:
@@ -201,14 +210,14 @@ def main(args):
                          args.output_dropout_rate, args.num_layers)
     decoder = TextAttnDecoderGRU(args.attn_model, tgt_embedding, args.hidden_size, len(tgt_vocab), args.num_layers,
                                  args.output_dropout_rate)
+    if args.file_name:
+        encoder.load_state_dict(encoder_sd)
+        decoder.load_state_dict(decoder_sd)
 
     def count_parameters(model):
         return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    print('The model has %d trainable parameters' % (count_parameters(encoder)+count_parameters(decoder)))
-
-    print('Building encoder and decoder...')
-    embedding = nn.Embedding()
+    print('Model built and ready to go! The model has %d trainable parameters' % (count_parameters(encoder)+count_parameters(decoder)))
 
     print('Building optimizers ...')
     encoder_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
@@ -220,120 +229,6 @@ def main(args):
     print('Start training!')
     train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embedding, tgt_embedding,
                 src_vocab, tgt_vocab, args)
-
-    pretrained_epoch = 0
-    if args.pretrained_epoch > 0:
-        pretrained_epoch = args.pretrained_epoch
-        encoder.load_state_dict(torch.load('./models/encoder-' + str(pretrained_epoch) + '.pkl'))
-        decoder.load_state_dict(torch.load('./models/decoder-' + str(pretrained_epoch) + '.pkl'))  # 先不用多种attention方法了
-
-    if torch.cuda.is_available():
-        encoder.cuda()
-        decoder.cuda()
-
-    criterion = nn.CrossEntropyLoss()
-    params = encoder.get_params() + decoder.get_params()
-    optimizer = get_optimizer(args.optimizer, args.learning_rate, params, weight_decay=args.L2_lambda)
-
-    total_train_step = len(train_data_loader)
-    total_val_step = len(val_data_loader)
-
-    min_avg_loss = float("inf")
-    overfit_warn = 0
-
-    for epoch in range(args.num_epochs):
-
-        if epoch < pretrained_epoch:
-            continue
-
-        encoder.train()
-        decoder.train()
-        avg_loss = 0.0
-        for bi, (sources, targets, src_lengths, tgt_lengths, image_features) in enumerate(train_data_loader):
-            encoder.zero_grad()
-            decoder.zero_grad()
-            loss = 0.0
-            try:
-                sources = sources.to(device)
-                targets = targets.to(device)
-                image_features = image_features.to(device)
-                encoder_output = encoder(sources)
-                output, tgt_output = decoder(encoder_output, image_features, targets)
-                output = output.contiguous().view(-1, output.shape[-1])
-                tgt_output = tgt_output.contiguous().view(-1)
-                loss += criterion(output, tgt_output)
-
-                avg_loss += loss.item()
-                #loss /= args.batch_size
-                loss.backward()
-                nn.utils.clip_grad_norm_(params, args.clip)
-                optimizer.step()
-            except RuntimeError as exception:
-                if "out of memory" in str(exception):
-                    print("WARNING: out of memory")
-                    if hasattr(torch.cuda, 'empty_cache'):
-                        torch.cuda.empty_cache()
-                else:
-                    raise exception
-
-            if bi % args.log_step == 0:
-                print('Epoch [%d/%d], Train Step [%d/%d], Loss: %.4f, Perplexity: %5.4f'
-                      %(epoch + 1, args.num_epochs, bi, total_train_step,
-                        loss.item(), np.exp(loss.item())))
-
-            # if bi >= 20:
-            #     break
-
-        avg_loss /= total_train_step
-        print('Epoch [%d/%d], Average Train Loss: %.4f' %
-              (epoch + 1, args.num_epochs, avg_loss))
-
-        if epoch % args.save_step == 0:
-            torch.save(encoder.state_dict(), os.path.join(args.model_path, 'encoder-%d.pkl' % (epoch+1)))
-            torch.save(decoder.state_dict(), os.path.join(args.model_path, 'decoder-%d.pkl' % (epoch + 1)))
-
-        encoder.eval()
-        decoder.eval()
-        avg_loss = 0.0
-        for bi, (sources, targets, src_lengths, tgt_lengths, image_features) in enumerate(val_data_loader):
-            sources = sources.to(device)
-            targets = targets.to(device)
-            image_features = image_features.to(device)
-            loss = 0.0
-            try:
-                encoder_output = encoder(sources)
-                output, tgt_output = decoder(encoder_output, image_features, targets)
-                output = output.contiguous().view(-1, output.shape[-1])
-                tgt_output = tgt_output.contiguous().view(-1)
-                loss += criterion(output, tgt_output)
-
-                avg_loss += loss.item()
-                #loss /= args.batch_size
-            except RuntimeError as exception:
-                if "out of memory" in str(exception):
-                    print("WARNING: out of memory")
-                    if hasattr(torch.cuda, 'empty_cache'):
-                        torch.cuda.empty_cache()
-                else:
-                    raise exception
-
-            if bi % args.log_step == 0:
-                print('Epoch [%d/%d], Val Step [%d/%d], Loss: %.4f, Perplexity: %5.4f'
-                      %(epoch + 1, args.num_epochs, bi, total_val_step,
-                        loss.item(), np.exp(loss.item())))
-
-            # if bi >= total_val_step:
-            #     break
-
-        avg_loss /= total_val_step
-        print('Epoch [%d/%d], Average Val Loss: %.4f' %
-              (epoch + 1, args.num_epochs, avg_loss))
-
-        overfit_warn = overfit_warn + 1 if (min_avg_loss < avg_loss) else 0
-        min_avg_loss = min(min_avg_loss, avg_loss)
-
-        if overfit_warn >= 10:
-            break
 
 
 if __name__ == '__main__':
