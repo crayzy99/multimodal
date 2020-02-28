@@ -341,7 +341,7 @@ if __name__ == '__main__':
     parser.add_argument('--model_path', type=str, default='./models/')
     parser.add_argument('--src_vocab_path', type=str, default='./models/src_vocab.pkl')
     parser.add_argument('--tgt_vocab_path', type=str, default='./models/tgt_vocab.pkl')
-    parser.add_argument('--data_path', type=str, default='../task1/tok/')
+    parser.add_argument('--data_path', type=str, default='dataset/data/task1/tok/')
     parser.add_argument('--image_feature_dir', type=str, default='../features_resnet50/')
     parser.add_argument('--log_step', type=str, default=20)
     parser.add_argument('--save_step', type=str, default=1)
