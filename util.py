@@ -2,7 +2,7 @@ import torch
 import torch.optim as optim
 import torch.nn as nn
 
-device = torch.device("cuda" if USE_CUDA else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available else "cpu")
 
 def get_optimizer(optimizer, lr, params, weight_decay):
     if optimizer == 'sgd':
@@ -60,7 +60,7 @@ def maskedNLLLoss(out, target, mask):
     crossEntropyLoss = -torch.log(torch.gather(out, 1, target.view(-1, 1)).squeeze(1))
     loss = crossEntropyLoss.masked_select(mask).mean()
     loss = loss.to(device)
-    return loss, nTotal
+    return loss, nTotal.item()
 
 def binaryMatrix(l, value=0):
     m = []

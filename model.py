@@ -4,6 +4,7 @@ import torch.nn as nn
 import torchnlp.nn as nlpnn
 from collections import OrderedDict
 from operator import itemgetter
+import torch.nn.functional as F
 
 
 class EncoderGRU(nn.Module):
@@ -97,7 +98,7 @@ class TextAttnDecoderGRU(nn.Module):
         :param embedding: 应该是目标语言
         :param output_size: 即目标语言的vocab_size
         '''
-        super(TextAttnDecoder, self).__init__()
+        super(TextAttnDecoderGRU, self).__init__()
         # Keep for reference
         self.attn_model = attn_model
         self.hidden_size = hidden_size
@@ -111,7 +112,7 @@ class TextAttnDecoderGRU(nn.Module):
         self.concat = nn.Linear(hidden_size * 2, hidden_size)
         self.out = nn.Linear(hidden_size, output_size)
 
-        self.attn = Attn(attn_model, hidden_size)
+        self.attn = LuongAttention(attn_model, hidden_size)
 
     def forward(self, input, last_hidden, encoder_outputs):
         '''

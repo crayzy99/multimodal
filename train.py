@@ -9,7 +9,6 @@ from data_loader import get_loader
 from vocab import Vocabulary
 from util import *
 from model import EncoderGRU, LuongAttention, TextAttnDecoderGRU
-from eval import evaluate
 import os
 import pickle
 import random
@@ -61,8 +60,9 @@ def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
     # 前向传播
     encoder_outputs, encoder_hidden = encoder(sources, lengths)
     decoder_input = torch.LongTensor([[tgt_vocab('b<start>') for _ in range(batch_size)]])  ## size = (1, batch)
+    decoder_input = decoder_input.to(device)
     decoder_hidden = encoder_hidden[:decoder.n_layers]
-    use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
+    use_teacher_forcing = True if random.random() < args.teacher_forcing_ratio else False
 
     # Decoder逐步向前传播
     if use_teacher_forcing:
@@ -91,6 +91,9 @@ def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
     loss.backward()
     encoder_total_norm = torch.nn.utils.clip_grad_norm_(encoder.parameters(), clip)
     decoder_total_norm = torch.nn.utils.clip_grad_norm_(decoder.parameters(), clip)
+    
+    encoder_optimizer.step()
+    decoder_optimizer.step()
 
     return sum(print_losses) / n_totals
 
@@ -121,7 +124,7 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
         for bi, (sources, targets, src_lengths, tgt_lengths, image_features, mask) in enumerate(train_data_loader):
             max_target_len = torch.max(tgt_lengths)
             # TODO: 继续完成下面的训练步骤。思考问题：分布式训练；模型参数如何得到
-            loss = train(sources, targets, tgt_lengths, mask, encoder, decoder, encoder_optimizer,
+            loss = train(sources, targets, src_lengths, mask, encoder, decoder, encoder_optimizer,
                          decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, args.teacher_forcing_ratio)
             print_loss += loss
             epoch_loss += loss
@@ -142,7 +145,7 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
             encoder.eval()
             decoder.eval()
             max_target_len = torch.max(tgt_lengths)
-            loss = train(sources, targets, tgt_lengths, mask, encoder, decoder, encoder_optimizer,
+            loss = train(sources, targets, src_lengths, mask, encoder, decoder, encoder_optimizer,
                          decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, 0)
             print_loss += loss
             eval_loss += loss
@@ -213,6 +216,8 @@ def main(args):
     if args.file_name:
         encoder.load_state_dict(encoder_sd)
         decoder.load_state_dict(decoder_sd)
+    encoder = encoder.to(device)
+    decoder = decoder.to(device)
 
     def count_parameters(model):
         return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -220,8 +225,8 @@ def main(args):
     print('Model built and ready to go! The model has %d trainable parameters' % (count_parameters(encoder)+count_parameters(decoder)))
 
     print('Building optimizers ...')
-    encoder_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
-    decoder_optimizer = optim.Adam(decoder.parameters(), lr=learning_rate * decoder_learning_ratio)
+    encoder_optimizer = optim.Adam(encoder.parameters(), lr=args.learning_rate)
+    decoder_optimizer = optim.Adam(decoder.parameters(), lr=args.learning_rate)
     if args.file_name:
         encoder_optimizer.load_state_dict(encoder_optimizer_sd)
         decoder_optimizer.load_state_dict(decoder_optimizer_sd)
@@ -237,7 +242,7 @@ if __name__ == '__main__':
     parser.add_argument('--src_vocab_path', type=str, default='./models/src_vocab.pkl')
     parser.add_argument('--tgt_vocab_path', type=str, default='./models/tgt_vocab.pkl')
     parser.add_argument('--data_path', type=str, default='dataset/data/task1/tok/')
-    parser.add_argument('--image_feature_dir', type=str, default='../features_resnet50/')
+    parser.add_argument('--image_feature_dir', type=str, default='dataset/data/features_resnet50/')
     parser.add_argument('--log_step', type=str, default=20)
     parser.add_argument('--save_step', type=str, default=1)
     parser.add_argument('--embed_size', type=int, default=620)
@@ -245,8 +250,8 @@ if __name__ == '__main__':
     #parser.add_argument('--hidden_size', type=int, default=1000)
     parser.add_argument('--image_feature_size', type=int, default=1024)
     parser.add_argument('--num_layers', type=int, default=2)
-    parser.add_argument('--embedding_dropout', type=float, default=0.4)
-    parser.add_argument('--output_dropout', type=float, default=0.5)
+    parser.add_argument('--embedding_dropout_rate', type=float, default=0.4)
+    parser.add_argument('--output_dropout_rate', type=float, default=0.5)
     parser.add_argument('--optimizer', type=str, default='adam')
     parser.add_argument('--L2_lambda', type=float, default=1e-5)
     parser.add_argument('--clip', type=float, default=1)
@@ -262,6 +267,7 @@ if __name__ == '__main__':
     parser.add_argument('--tgt_language', type=str, default='de')
     parser.add_argument('--file_name', type=str, default=None)
     parser.add_argument('--attn_model', type=str, default='dot')
+    parser.add_argument('--teacher_forcing_ratio', type=float, default=1)
     args = parser.parse_args()
     print(args)
     main(args)

@@ -20,11 +20,11 @@ class Flickr30k(data.Dataset):
         if type == 'test':
             src_file = data_path + type + '_2016_flickr.lc.norm.tok.en'
             tgt_file = data_path + type + '_2016_flickr.lc.norm.tok.de'
-            self.image_feature_dir = image_feature_dir + type + '_2016_flickr-resnet50-res4frelu.npy'
+            self.image_feature_dir = image_feature_dir + type + '_2016_flickr-resnet50-avgpool.npy'
         else:
             src_file = data_path + type + '.lc.norm.tok.en'
             tgt_file = data_path + type + '.lc.norm.tok.de'
-            self.image_feature_dir = image_feature_dir + type + '-resnet50-res4frelu.npy'
+            self.image_feature_dir = image_feature_dir + type + '-resnet50-avgpool.npy'
         with open(src_file, 'r', encoding='utf-8') as f:
             self.src += f.readlines()
         with open(tgt_file, 'r', encoding='utf-8') as f:
@@ -82,17 +82,23 @@ class Flickr30k(data.Dataset):
 
 def collate_fn(data):
     sources, targets, image_features = zip(*data)
-    src_lengths = [len(source) for source in sources]
+    src_lengths = torch.tensor(np.array([len(source) for source in sources]))
+    src_index = np.argsort(-src_lengths)
     sources_tensor = torch.zeros(len(sources), max(src_lengths)).long()
     for i, source in enumerate(sources):
         end = src_lengths[i]
         sources_tensor[i, :end] = source
 
-    tgt_lengths = [len(target) for target in targets]
+    tgt_lengths = torch.tensor(np.array([len(target) for target in targets]))
     targets_tensor = torch.zeros(len(targets), max(tgt_lengths)).long()  ## size = (batch, max_tgt_len)
     for i, target in enumerate(targets):
         end = tgt_lengths[i]
         targets_tensor[i, :end] = target
+
+    src_lengths = src_lengths[src_index]
+    tgt_lengths = tgt_lengths[src_index]
+    sources_tensor = sources_tensor[src_index]
+    targets_tensor = targets_tensor[src_index] 
 
     mask = targets_tensor.ne(0)
     sources_tensor = sources_tensor.transpose(0,1)
@@ -100,6 +106,7 @@ def collate_fn(data):
     mask = mask.transpose(0,1)
 
     image_features = torch.stack(image_features, dim=0)  ## size = (batch, image_feature_size)
+    image_features = image_features[src_index]
 
     return sources_tensor, targets_tensor, src_lengths, tgt_lengths, image_features, mask
 
@@ -107,5 +114,5 @@ def collate_fn(data):
 def get_loader(image_feature_dir, data_path, src_vocab, tgt_vocab, batch_size, type, shuffle):
     dataset = Flickr30k(image_feature_dir, data_path, type, src_vocab, tgt_vocab)
 
-    data_loader = data.DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle, collate_fn=collate_fn)
+    data_loader = data.DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle, collate_fn=collate_fn, drop_last=True)
     return data_loader
