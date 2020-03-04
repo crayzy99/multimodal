@@ -23,7 +23,7 @@ def to_var(x):
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
-          decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, teacher_forcing_ratio, isTrain):
+          decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, teacher_forcing_ratio):
     '''
     :param sources: size = (max_src_len, batch), 注意与一般情形是相反的
     :param targets: size = (max_tgt_len, batch)
@@ -88,15 +88,75 @@ def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
             print_losses.append(mask_loss.item() * nTotal)
             n_totals += nTotal
 
-    if isTrain:
-        loss.backward()
-        encoder_total_norm = torch.nn.utils.clip_grad_norm_(encoder.parameters(), clip)
-        decoder_total_norm = torch.nn.utils.clip_grad_norm_(decoder.parameters(), clip)
+    loss.backward()
+    encoder_total_norm = torch.nn.utils.clip_grad_norm_(encoder.parameters(), clip)
+    decoder_total_norm = torch.nn.utils.clip_grad_norm_(decoder.parameters(), clip)
 
-        encoder_optimizer.step()
-        decoder_optimizer.step()
+    encoder_optimizer.step()
+    decoder_optimizer.step()
 
     return sum(print_losses) / n_totals
+
+
+def validate(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
+          decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len):
+    '''
+    :param sources: size = (max_src_len, batch), 注意与一般情形是相反的
+    :param targets: size = (max_tgt_len, batch)
+    :param lengths: 解码端句子的长度
+    :param mask:
+    :param encoder:
+    :param decoder:
+    :param embedding:
+    :param encoder_optimizer:
+    :param decoder_optimizer:
+    :param src_vocab:
+    :param tgt_vocab:
+    :param args:
+    :param max_target_len:
+    :return:
+    '''
+    batch_size = args.batch_size
+    clip = args.clip
+    MAX_LEN = args.max_len
+
+    # zero gradients
+    encoder_optimizer.zero_grad()
+    decoder_optimizer.zero_grad()
+
+    sources = sources.to(device)
+    targets = targets.to(device)
+    lengths = lengths.to(device)
+    mask = mask.to(device)
+
+    loss = 0
+    print_losses = []
+    n_totals = 0
+
+    # 前向传播
+    encoder_outputs, encoder_hidden = encoder(sources, lengths)
+    decoder_input = torch.LongTensor([[tgt_vocab('b<start>') for _ in range(batch_size)]])  ## size = (1, batch)
+    decoder_input = decoder_input.to(device)
+    decoder_hidden = encoder_hidden[:decoder.n_layers]
+    batch_result = torch.zeros((max_target_len, batch_size))
+
+    # Decoder逐步向前传播
+    for t in range(max_target_len):
+        decoder_output, decoder_hidden = decoder(
+            decoder_input, decoder_hidden, encoder_outputs
+        )
+        # No teacher forcing: next input is decoder's own current output
+        _, topi = decoder_output.topk(1)
+        decoder_input = torch.LongTensor([[topi[i][0] for i in range(batch_size)]])  ## size = (1,batch)
+        decoder_input = decoder_input.to(device)
+        batch_result[t] = decoder_input
+        # Calculate and accumulate loss
+        mask_loss, nTotal = maskedNLLLoss(decoder_output, targets[t], mask[t])
+        loss += mask_loss
+        print_losses.append(mask_loss.item() * nTotal)
+        n_totals += nTotal
+
+    return sum(print_losses) / n_totals, batch_result.transpose(0,1)
 
 
 def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embedding,tgt_embedding,
@@ -130,7 +190,7 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
             max_target_len = torch.max(tgt_lengths)
             # TODO: 继续完成下面的训练步骤。思考问题：分布式训练；模型参数如何得到
             loss = train(sources, targets, src_lengths, mask, encoder, decoder, encoder_optimizer,
-                         decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, args.teacher_forcing_ratio, True)
+                         decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, args.teacher_forcing_ratio)
             print_loss += loss
             epoch_loss += loss
 
@@ -146,12 +206,14 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
         print("Evaluating for epoch {}...".format(epoch))
         eval_loss = 0
         print_loss = 0
+        decoder_output = []
         for bi, (sources, targets, src_lengths, tgt_lengths, image_features, mask) in enumerate(val_data_loader):
             encoder.eval()
             decoder.eval()
             max_target_len = torch.max(tgt_lengths)
-            loss = train(sources, targets, src_lengths, mask, encoder, decoder, encoder_optimizer,
-                         decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, 0, False)
+            loss, batch_output = validate(sources, targets, src_lengths, mask, encoder, decoder, encoder_optimizer,  ## size = (batch_size, max_len)
+                                            decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len)
+            decoder_output.append(batch_output)
             print_loss += loss
             eval_loss += loss
 
@@ -162,6 +224,18 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
 
         eval_avg_loss = eval_loss / total_val_step
         print("[Epoch {}] Average eval loss: {:.4f}".format(epoch, eval_avg_loss))
+        decoder_output = torch.cat(decoder_output, 0)  ## size = (val_size, max_len)
+        decoder_output = decoder_output.cpu().numpy()
+
+        # generate answer for the first 10 sentences
+        print("Decode sample:")
+        for i in range(10):
+            ans = ''
+            for i, id in enumerate(decoder_output[i]):
+                if id == tgt_vocab(b'<end>'):
+                    break
+                ans += tgt_vocab.idx2word[id.item()].decode() + ' '
+            print(ans)
 
         # save model
         directory = os.path.join(args.model_path, args.model_name, '{}-{}'.format(args.src_language, args.tgt_language),
