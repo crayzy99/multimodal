@@ -23,7 +23,7 @@ def to_var(x):
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
-          decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, teacher_forcing_ratio):
+          decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, teacher_forcing_ratio, isTrain):
     '''
     :param sources: size = (max_src_len, batch), 注意与一般情形是相反的
     :param targets: size = (max_tgt_len, batch)
@@ -62,7 +62,7 @@ def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
     decoder_input = torch.LongTensor([[tgt_vocab('b<start>') for _ in range(batch_size)]])  ## size = (1, batch)
     decoder_input = decoder_input.to(device)
     decoder_hidden = encoder_hidden[:decoder.n_layers]
-    use_teacher_forcing = True if random.random() < args.teacher_forcing_ratio else False
+    use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
 
     # Decoder逐步向前传播
     if use_teacher_forcing:
@@ -83,17 +83,18 @@ def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
             decoder_input = torch.LongTensor([[topi[i][0] for i in range(batch_size)]])
             decoder_input = decoder_input.to(device)
             # Calculate and accumulate loss
-            mask_loss, nTotal = maskNLLLoss(decoder_output, target_variable[t], mask[t])
+            mask_loss, nTotal = maskedNLLLoss(decoder_output, targets[t], mask[t])
             loss += mask_loss
             print_losses.append(mask_loss.item() * nTotal)
             n_totals += nTotal
 
-    loss.backward()
-    encoder_total_norm = torch.nn.utils.clip_grad_norm_(encoder.parameters(), clip)
-    decoder_total_norm = torch.nn.utils.clip_grad_norm_(decoder.parameters(), clip)
-    
-    encoder_optimizer.step()
-    decoder_optimizer.step()
+    if isTrain:
+        loss.backward()
+        encoder_total_norm = torch.nn.utils.clip_grad_norm_(encoder.parameters(), clip)
+        decoder_total_norm = torch.nn.utils.clip_grad_norm_(decoder.parameters(), clip)
+
+        encoder_optimizer.step()
+        decoder_optimizer.step()
 
     return sum(print_losses) / n_totals
 
@@ -111,8 +112,10 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
     # Initialization
     print('Initializing...')
     start_epoch = args.pretrained_epoch
-    total_train_step = len(train_data_loader)
+    total_train_step = int(len(train_data_loader) * args.train_length)
     total_val_step = len(val_data_loader)
+    print('Total train step:', total_train_step)
+    print('Total val step:', total_val_step)
     min_avg_loss = float("inf")
     overfit_warn = 0
     print('Start training...')
@@ -122,10 +125,12 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
         encoder.train()
         decoder.train()
         for bi, (sources, targets, src_lengths, tgt_lengths, image_features, mask) in enumerate(train_data_loader):
+            if bi > total_train_step:
+                break
             max_target_len = torch.max(tgt_lengths)
             # TODO: 继续完成下面的训练步骤。思考问题：分布式训练；模型参数如何得到
             loss = train(sources, targets, src_lengths, mask, encoder, decoder, encoder_optimizer,
-                         decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, args.teacher_forcing_ratio)
+                         decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, args.teacher_forcing_ratio, True)
             print_loss += loss
             epoch_loss += loss
 
@@ -134,7 +139,7 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
                 print("[Epoch {}, train iteration {}] Average loss: {:.4f}".format(epoch, bi, print_loss_avg))
                 print_loss = 0
 
-        batch_loss_avg = batch_loss / total_train_step
+        batch_loss_avg = epoch_loss / total_train_step
         print("[Epoch {}] Average train loss: {:.4f}".format(epoch, batch_loss_avg))
 
         # start evaluation step
@@ -146,7 +151,7 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
             decoder.eval()
             max_target_len = torch.max(tgt_lengths)
             loss = train(sources, targets, src_lengths, mask, encoder, decoder, encoder_optimizer,
-                         decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, 0)
+                         decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, 0, False)
             print_loss += loss
             eval_loss += loss
 
@@ -155,8 +160,8 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
                 print("[Epoch {}, evaluation iteration {}] Average loss: {:.4f}".format(epoch, bi, print_loss_avg))
                 print_loss = 0
 
-        eval_loss_avg = eval_loss / total_val_step
-        print("[Epoch {}] Average eval loss: {:.4f}".format(epoch, eval_loss_avg))
+        eval_avg_loss = eval_loss / total_val_step
+        print("[Epoch {}] Average eval loss: {:.4f}".format(epoch, eval_avg_loss))
 
         # save model
         directory = os.path.join(args.model_path, args.model_name, '{}-{}'.format(args.src_language, args.tgt_language),
@@ -172,12 +177,12 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
             'epoch_loss': batch_loss_avg,
             'source_embedding': src_embedding,
             'target_embedding': tgt_embedding
-        }, os.path.join(directory, '{}_{}_{:.2f}.tar'.format(epoch, 'checkpoint', eval_loss_avg)))
+        }, os.path.join(directory, '{}_{}_{:.2f}.tar'.format(epoch, 'checkpoint', eval_avg_loss)))
         torch.save(encoder.state_dict(), os.path.join(args.model_path, 'encoder-%d.pkl' % (epoch + 1)))
         torch.save(decoder.state_dict(), os.path.join(args.model_path, 'decoder-%d.pkl' % (epoch + 1)))
 
-        overfit_warn = overfit_warn + 1 if (min_avg_loss < avg_loss) else 0
-        min_avg_loss = min(min_avg_loss, avg_loss)
+        overfit_warn = overfit_warn + 1 if (min_avg_loss < eval_avg_loss) else 0
+        min_avg_loss = min(min_avg_loss, eval_avg_loss)
 
         if overfit_warn >= 10:
             break
@@ -256,7 +261,8 @@ if __name__ == '__main__':
     parser.add_argument('--L2_lambda', type=float, default=1e-5)
     parser.add_argument('--clip', type=float, default=1)
     parser.add_argument('--max_len', type=int, default=30)
-
+    
+    parser.add_argument('--model_name', type=str, default='seq2seq-text')
     parser.add_argument('--pretrained_epoch', type=int, default=0)
     parser.add_argument('--num_epochs', type=int, default=100)
     parser.add_argument('--batch_size', type=int, default=2)
@@ -268,6 +274,7 @@ if __name__ == '__main__':
     parser.add_argument('--file_name', type=str, default=None)
     parser.add_argument('--attn_model', type=str, default='dot')
     parser.add_argument('--teacher_forcing_ratio', type=float, default=1)
+    parser.add_argument('--train_length', type=float, default=1)
     args = parser.parse_args()
     print(args)
     main(args)

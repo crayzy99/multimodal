@@ -1,50 +1,101 @@
 import argparse
 import torch
 import torch.nn as nn
+from torch.autograd import Variable
 import numpy as np
-import argparse
+from data_loader import get_loader
+from vocab import Vocabulary
+from util import *
+from model import EncoderGRU, LuongAttention, TextAttnDecoderGRU
+import os
 import pickle
 import random
-import os
-from data_loader import get_loader
-from torch.autograd import Variable
-from vocab import Vocabulary
-from model import Encoder, AttnDecoder_1
-
 
 def to_var(x, volatile=False):
     if torch.cuda.is_available():
         x = x.cuda()
     return Variable(x, volatile=volatile)
 
-
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+def evaluate(encoder, decoder, src_embedding, tgt_embedding, src_vocab, tgt_vocab, data_loader, args):
+    
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--data_path', type=str, default='../task1/tok/')
-parser.add_argument('--image_feature_dir', type=str, default='../features_resnet50/')
-parser.add_argument('--result_path', type=str, default='./result.txt')
-parser.add_argument('--model_num', type=int , default=46,
-                    help='step size for prining log info')
+def main(args):
+    if not os.path.exists(args.model_path):
+        os.makedirs(args.model_path)
 
-parser.add_argument('--batch_size', type=int, default=1)
-parser.add_argument('--maxlen', type=int, default=50)
-parser.add_argument('--src_vocab_path', type=str, default='./models/src_vocab.pkl',
-                    help='path for source vocabulary wrapper')
-parser.add_argument('--tgt_vocab_path', type=str, default='./models/tgt_vocab.pkl',
-                    help='path for target vocabulary wrapper')
-parser.add_argument('--embed_size', type=int , default=620 ,
-                    help='dimension of word embedding vectors')
-parser.add_argument('--image_size', type=int, default=1024)
-parser.add_argument('--encoder_hidden_size', type=int , default=500 ,
-                    help='dimension of encoder lstm hidden states')
-parser.add_argument('--decoder_hidden_size', type=int, default=1000)
-parser.add_argument('--num_layer', type=int, default=2)
-parser.add_argument('--cuda_num', type=int, default=0)
-parser.add_argument('--beam_size', type=int, default=12)
+    with open(args.src_vocab_path, 'rb') as f:
+        src_vocab = pickle.load(f)
+    with open(args.tgt_vocab_path, 'rb') as f:
+        tgt_vocab = pickle.load(f)
+    torch.cuda.set_device(args.cuda_num)
 
-args = parser.parse_args()
+    if args.file_name:
+        checkpoint = torch.load(args.file_name)
+        encoder_sd = checkpoint['enc']
+        decoder_sd = checkpoint['dec']
+        src_embedding_sd = checkpoint['source_embedding']
+        tgt_embedding_sd = checkpoint['target_embedding']
+    print('Building encoder and decoder...')
+    src_embedding = nn.Embedding(en(src_vocab), args.embed_size)
+    tgt_embedding = nn.Embedding(len(tgt_vocab), args.embed_size)
+    if args.file_name:
+        src_embedding.load_state_dict(src_embedding_sd)
+        tgt_embedding.load_state_dict(tgt_embedding_sd)
+    encoder = EncoderGRU(args.embed_size, args.hidden_size, src_vocab, src_embedding, args.embedding_dropout_rate,
+                         args.output_dropout_rate, args.num_layers)
+    decoder = TextAttnDecoderGRU(args.attn_model, tgt_embedding, args.hidden_size, len(tgt_vocab), args.num_layers,
+                                 args.output_dropout_rate)
+    if args.file_name:
+        encoder.load_state_dict(encoder_sd)
+        decoder.load_state_dict(decoder_sd)
+    encoder = encoder.to(device)
+    decoder = decoder.to(device)
+    
+    print('Start evaluating!')
+    evaluate(encoder, decoder, src_embedding, tgt_embedding, src_vocab, tgt_vocab, args)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    
+    parser.add_argument('--model_path', type=str, default='./models/')
+    parser.add_argument('--src_vocab_path', type=str, default='./models/src_vocab.pkl')
+    parser.add_argument('--tgt_vocab_path', type=str, default='./models/tgt_vocab.pkl')
+    parser.add_argument('--data_path', type=str, default='dataset/data/task1/tok/')
+    parser.add_argument('--image_feature_dir', type=str, default='dataset/data/features_resnet50/')
+    parser.add_argument('--log_step', type=str, default=20)
+    parser.add_argument('--save_step', type=str, default=1)
+    parser.add_argument('--embed_size', type=int, default=620)
+    parser.add_argument('--hidden_size', type=int, default=500)
+    #parser.add_argument('--hidden_size', type=int, default=1000)
+    parser.add_argument('--image_feature_size', type=int, default=1024)
+    parser.add_argument('--num_layers', type=int, default=2)
+    parser.add_argument('--embedding_dropout_rate', type=float, default=0.4)
+    parser.add_argument('--output_dropout_rate', type=float, default=0.5)
+    parser.add_argument('--optimizer', type=str, default='adam')
+    parser.add_argument('--L2_lambda', type=float, default=1e-5)
+    parser.add_argument('--clip', type=float, default=1)
+    parser.add_argument('--max_len', type=int, default=30)
+    
+    parser.add_argument('--model_name', type=str, default='seq2seq-text')
+    parser.add_argument('--pretrained_epoch', type=int, default=0)
+    parser.add_argument('--num_epochs', type=int, default=100)
+    parser.add_argument('--batch_size', type=int, default=2)
+    parser.add_argument('--learning_rate', type=float, default=0.001)
+    parser.add_argument('--cuda_num', type=int, default=0)
+    parser.add_argument('--print_every', type=int, default=200)
+    parser.add_argument('--src_language', type=str, default='en')
+    parser.add_argument('--tgt_language', type=str, default='de')
+    parser.add_argument('--file_name', type=str, default=None)
+    parser.add_argument('--attn_model', type=str, default='dot')
+    parser.add_argument('--teacher_forcing_ratio', type=float, default=1)
+    parser.add_argument('--train_length', type=float, default=1)
+    parser.add_argument('--beam_size', type=int, default=12)
+    
+    args = parser.parse_args()
+    main(args)
 
 torch.cuda.set_device(args.cuda_num)
 result_path = args.result_path
