@@ -71,7 +71,7 @@ class Flickr30k(data.Dataset):
         tgt_tokens = tgt_sent.split()
         #target.append(tgt_vocab(b'<start>'))
         target.extend([tgt_vocab(token) for token in tgt_tokens])
-        target.append(tgt_vocab(b'<end>'))
+        target.append(tgt_vocab('<end>'))
         target = torch.Tensor(target)
 
         return source, target, image_feature

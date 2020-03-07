@@ -19,7 +19,7 @@ class Vocabulary(object):
 
     def __call__(self, word):
         if not word in self.word2idx:
-            return self.word2idx[b'<unk>']
+            return self.word2idx['<unk>']
         return self.word2idx[word]
 
     def __len__(self):
@@ -42,10 +42,10 @@ def build_vocab(data_path, threshold, src_language, tgt_language):
     src_words = [word for word, cnt in src_counter.items() if cnt >= threshold]
 
     src_vocab = Vocabulary()
-    src_vocab.add_word(b'<pad>')
-    src_vocab.add_word(b'<start>')
-    src_vocab.add_word(b'<end>')
-    src_vocab.add_word(b'<unk>')
+    src_vocab.add_word('<pad>')
+    src_vocab.add_word('<start>')
+    src_vocab.add_word('<end>')
+    src_vocab.add_word('<unk>')
     for i, word in enumerate(src_words):
         src_vocab.add_word(word)
 
@@ -59,10 +59,10 @@ def build_vocab(data_path, threshold, src_language, tgt_language):
     tgt_words = [word for word, cnt in tgt_counter.items() if cnt >= threshold]
 
     tgt_vocab = Vocabulary()
-    tgt_vocab.add_word(b'<pad>')
-    tgt_vocab.add_word(b'<start>')
-    tgt_vocab.add_word(b'<end>')
-    tgt_vocab.add_word(b'<unk>')
+    tgt_vocab.add_word('<pad>')
+    tgt_vocab.add_word('<start>')
+    tgt_vocab.add_word('<end>')
+    tgt_vocab.add_word('<unk>')
     for i, word in enumerate(tgt_words):
         tgt_vocab.add_word(word)
 

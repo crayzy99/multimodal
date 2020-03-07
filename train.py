@@ -59,7 +59,7 @@ def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
 
     # 前向传播
     encoder_outputs, encoder_hidden = encoder(sources, lengths)
-    decoder_input = torch.LongTensor([[tgt_vocab('b<start>') for _ in range(batch_size)]])  ## size = (1, batch)
+    decoder_input = torch.LongTensor([[tgt_vocab('<start>') for _ in range(batch_size)]])  ## size = (1, batch)
     decoder_input = decoder_input.to(device)
     decoder_hidden = encoder_hidden[:decoder.n_layers]
     use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
@@ -116,7 +116,7 @@ def validate(sources, targets, lengths, mask, encoder, decoder, encoder_optimize
     :param max_target_len:
     :return:
     '''
-    batch_size = args.batch_size
+    batch_size = 1
     clip = args.clip
     MAX_LEN = args.max_len
 
@@ -135,7 +135,7 @@ def validate(sources, targets, lengths, mask, encoder, decoder, encoder_optimize
 
     # 前向传播
     encoder_outputs, encoder_hidden = encoder(sources, lengths)
-    decoder_input = torch.LongTensor([[tgt_vocab('b<start>') for _ in range(batch_size)]])  ## size = (1, batch)
+    decoder_input = torch.LongTensor([[tgt_vocab('<start>') for _ in range(batch_size)]])  ## size = (1, batch)
     decoder_input = decoder_input.to(device)
     decoder_hidden = encoder_hidden[:decoder.n_layers]
     batch_result = torch.zeros((max_target_len, batch_size))
@@ -165,9 +165,9 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
     print_every = args.print_every
     # load batches
     train_data_loader = get_loader(args.image_feature_dir, args.data_path, src_vocab, tgt_vocab,
-                                   batch_size=args.batch_size, type='train', shuffle=True)
+                                   batch_size=args.batch_size, type='train', shuffle=False)
     val_data_loader = get_loader(args.image_feature_dir, args.data_path, src_vocab, tgt_vocab,
-                                 batch_size=args.batch_size, type='val', shuffle=True)
+                                 batch_size=1, type='val', shuffle=False)
 
     # Initialization
     print('Initializing...')
@@ -224,17 +224,18 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
 
         eval_avg_loss = eval_loss / total_val_step
         print("[Epoch {}] Average eval loss: {:.4f}".format(epoch, eval_avg_loss))
-        decoder_output = torch.cat(decoder_output, 0)  ## size = (val_size, max_len)
-        decoder_output = decoder_output.cpu().numpy()
+        #decoder_output = torch.cat(decoder_output, 0)  ## size = (val_size, max_len)
+        #decoder_output = decoder_output.cpu().numpy()
 
         # generate answer for the first 10 sentences
         print("Decode sample:")
         for i in range(10):
             ans = ''
-            for i, id in enumerate(decoder_output[i]):
-                if id == tgt_vocab(b'<end>'):
+            tmp_output = decoder_output[i].cpu().numpy()[0]
+            for i, idx in enumerate(tmp_output):
+                if idx == tgt_vocab('<end>'):
                     break
-                ans += tgt_vocab.idx2word[id.item()].decode() + ' '
+                ans += tgt_vocab.idx2word[idx.item()] + ' '
             print(ans)
 
         # save model
