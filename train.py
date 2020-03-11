@@ -118,12 +118,6 @@ def validate(sources, targets, lengths, mask, encoder, decoder, encoder_optimize
     :return:
     '''
     batch_size = 1
-    clip = args.clip
-    MAX_LEN = args.max_len
-
-    # zero gradients
-    encoder_optimizer.zero_grad()
-    decoder_optimizer.zero_grad()
 
     sources = sources.to(device)
     targets = targets.to(device)
