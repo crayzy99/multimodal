@@ -12,6 +12,7 @@ from model import EncoderGRU, LuongAttention, TextAttnDecoderGRU
 import os
 import pickle
 import random
+import shutil
 
 
 def to_var(x):
@@ -179,11 +180,16 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
     min_avg_loss = float("inf")
     overfit_warn = 0
     print('Start training...')
+    directory = os.path.join(args.model_path, args.model_name, '{}-{}'.format(args.src_language, args.tgt_language),
+                              '{}layers_{}hidden'.format(args.num_layers, args.hidden_size))
+    if os.path.exists(directory):
+        shutil.rmtree(directory)
     for epoch in range(start_epoch, args.num_epochs+1):
         epoch_loss = 0
         print_loss = 0
         encoder.train()
         decoder.train()
+        
         for bi, (sources, targets, src_lengths, tgt_lengths, image_features, mask) in enumerate(train_data_loader):
             if bi > total_train_step:
                 break
@@ -260,6 +266,7 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
         min_avg_loss = min(min_avg_loss, eval_avg_loss)
 
         if overfit_warn >= 10:
+            print("Model overfit!")
             break
 
 
