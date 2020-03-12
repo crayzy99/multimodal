@@ -250,8 +250,8 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
             'enc_opt': encoder_optimizer.state_dict(),
             'dec_opt': decoder_optimizer.state_dict(),
             'epoch_loss': batch_loss_avg,
-            'source_embedding': src_embedding,
-            'target_embedding': tgt_embedding
+            'source_embedding': src_embedding.state_dict(),
+            'target_embedding': tgt_embedding.state_dict()
         }, os.path.join(directory, '{}_{}_{:.2f}.tar'.format(epoch, 'checkpoint', eval_avg_loss)))
         torch.save(encoder.state_dict(), os.path.join(args.model_path, 'encoder-%d.pkl' % (epoch + 1)))
         torch.save(decoder.state_dict(), os.path.join(args.model_path, 'decoder-%d.pkl' % (epoch + 1)))
