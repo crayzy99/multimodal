@@ -45,69 +45,89 @@ def evaluate(encoder, decoder, src_embedding, tgt_embedding, src_vocab, tgt_voca
         decoder_input = decoder_input.to(device)
         decoder_hidden = encoder_hidden[:decoder.n_layers]
 
-        # prev_paths保存目前概率最高的k个path（初始只有一个）. 列表元素有两个，第一个是一个tuple保存路径（也是一个列表）以及
-        # 生成下一个token所需的hidden_state
-        vocab = tgt_vocab
-        idx = torch.LongTensor([vocab(b'<start>')]).to(device)
-        prev_paths = [[([idx], decoder_hidden), 1.0]]
-        # new_paths保存下一个token可能的情况，计算完成后将会有k**2个条目，
-        new_paths = []
-        hidden_size = args.hidden_size
-        beam_size = args.beam_size
-        end_vocab = vocab('<end>')
-        forbidden_list = [vocab('<pad>'), vocab('<start>'), vocab('<unk>')]
-        termination_list = [vocab('.'), vocab('?'), vocab('!')]
-        function_list = [vocab('<end>'), vocab('.'), vocab('?'), vocab('!'), vocab('a'), vocab('an'), vocab('am'),
-                         vocab('is'), vocab('was'), vocab('are'), vocab('were'), vocab('do'), vocab('does'),
-                         vocab('did')]
+        # # prev_paths保存目前概率最高的k个path（初始只有一个）. 列表元素有两个，第一个是一个tuple保存路径（也是一个列表）以及
+        # # 生成下一个token所需的hidden_state
+        # vocab = tgt_vocab
+        # idx = torch.LongTensor([vocab(b'<start>')]).to(device)
+        # prev_paths = [[([idx], decoder_hidden), 1.0]]
+        # # new_paths保存下一个token可能的情况，计算完成后将会有k**2个条目，
+        # new_paths = []
+        # hidden_size = args.hidden_size
+        # beam_size = args.beam_size
+        # end_vocab = vocab('<end>')
+        # forbidden_list = [vocab('<pad>'), vocab('<start>'), vocab('<unk>')]
+        # termination_list = [vocab('.'), vocab('?'), vocab('!')]
+        # function_list = [vocab('<end>'), vocab('.'), vocab('?'), vocab('!'), vocab('a'), vocab('an'), vocab('am'),
+        #                  vocab('is'), vocab('was'), vocab('are'), vocab('were'), vocab('do'), vocab('does'),
+        #                  vocab('did')]
+        #
+        # # Decoder逐步向前传播
+        # for t in range(max_target_len):
+        #     # beam search
+        #     for i, prev_ in enumerate(prev_paths):
+        #         prev_condition = prev_[0]  ## 也就是之前的path和当前hidden state
+        #         prob = prev_[1]  # 当前path概率
+        #         prev_path, prev_hidden = prev_condition
+        #         last_word_idx = prev_path[-1]
+        #         # 如果path中的上一个token是eof，直接break
+        #         if last_word_idx == end_vocab:
+        #             new_paths.append(prev_paths[i])
+        #             break
+        #         # 过decoder
+        #         decoder_output, decoder_hidden = decoder(
+        #             decoder_input, decoder_hidden, encoder_outputs
+        #         )
+        #         decoder_output = decoder_output.squeeze().squeeze()  # shape = (hidden_size,) 未经softmax
+        #         # 如果上一个词不是终止token（标点符号），则禁止输出eof
+        #         if last_word_idx not in termination_list:
+        #             decoder_output[end_vocab] = -1000.0
+        #         # 禁止输出fobidden tokens
+        #         for forbidden in forbidden_list:
+        #             decoder_output[forbidden] = -1000.0
+        #
+        #         output_prob = F.softmax(decoder_output, dim=0)  # shape = (hidden_size,) prob_like
+        #         values, indices = torch.topk(output_prob, beam_size)
+        #         for ix in range(beam_size):
+        #             new_paths.append([(prev_path + [indices[ix]], decoder_hidden), prob + torch.log(values[ix] + 1e-6)])
+        #
+        #     # 现在new_paths里应该有beam_size**2个条目
+        #     sorted_paths = sorted(new_paths, key=operator.itemgetter(1))
+        #     prev_paths = sorted_paths[:beam_size]
+        #     new_paths = []
+        #
+        # assert len(prev_paths) > 0
+        # ans = prev_paths[0][0][0]
 
-        # Decoder逐步向前传播
+        #     print("Decoding sample {}/{}".format(bi, len(test_data_loader)))
+        #     ans_str = ''
+        #     for i, idx in enumerate(ans):
+        #         if idx == tgt_vocab('<end>'):
+        #             break
+        #         ans_str += tgt_vocab.idx2word[idx.item()] + ' '
+        #     results.append(ans_str)
+        #
+        # with open("results.txt", "w") as f:
+        #     f.writelines([line+"\n" for line in results])
+
+        output = []
         for t in range(max_target_len):
-            # beam search
-            for i, prev_ in enumerate(prev_paths):
-                prev_condition = prev_[0]  ## 也就是之前的path和当前hidden state
-                prob = prev_[1]  # 当前path概率
-                prev_path, prev_hidden = prev_condition
-                last_word_idx = prev_path[-1]
-                # 如果path中的上一个token是eof，直接break
-                if last_word_idx == end_vocab:
-                    new_paths.append(prev_paths[i])
+            decoder_output, decoder_hidden = decoder(
+                decoder_input, decoder_hidden, encoder_outputs
+            )
+            # No teacher forcing: next input is decoder's own current output
+            _, topi = decoder_output.topk(1)
+            decoder_input = torch.LongTensor([[topi[i][0] for i in range(batch_size)]])  ## size = (1,batch)
+            decoder_input = decoder_input.to(device)
+            output[t] = decoder_input[0]
+
+        for i in range(10):
+            ans = ''
+            tmp_output = output[i].cpu().numpy()
+            for i, idx in enumerate(tmp_output):
+                if idx == tgt_vocab('<end>'):
                     break
-                # 过decoder
-                decoder_output, decoder_hidden = decoder(
-                    decoder_input, decoder_hidden, encoder_outputs
-                )
-                decoder_output = decoder_output.squeeze().squeeze()  # shape = (hidden_size,) 未经softmax
-                # 如果上一个词不是终止token（标点符号），则禁止输出eof
-                if last_word_idx not in termination_list:
-                    decoder_output[end_vocab] = -1000.0
-                # 禁止输出fobidden tokens
-                for forbidden in forbidden_list:
-                    decoder_output[forbidden] = -1000.0
-
-                output_prob = F.softmax(decoder_output, dim=0)  # shape = (hidden_size,) prob_like
-                values, indices = torch.topk(output_prob, beam_size)
-                for ix in range(beam_size):
-                    new_paths.append([(prev_path + [indices[ix]], decoder_hidden), prob + torch.log(values[ix] + 1e-6)])
-
-            # 现在new_paths里应该有beam_size**2个条目
-            sorted_paths = sorted(new_paths, key=operator.itemgetter(1))
-            prev_paths = sorted_paths[:beam_size]
-            new_paths = []
-
-        assert len(prev_paths) > 0
-        ans = prev_paths[0][0][0]
-
-        print("Decoding sample {}/{}".format(bi, len(test_data_loader)))
-        ans_str = ''
-        for i, idx in enumerate(ans):
-            if idx == tgt_vocab('<end>'):
-                break
-            ans_str += tgt_vocab.idx2word[idx.item()] + ' '
-        results.append(ans_str)
-
-    with open("results.txt", "w") as f:
-        f.writelines([line+"\n" for line in results])
+                ans += tgt_vocab.idx2word[idx.item()] + ' '
+            print(ans)
 
 
 def main(args):
