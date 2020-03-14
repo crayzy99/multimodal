@@ -160,9 +160,11 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
     print_every = args.print_every
     # load batches
     train_data_loader = get_loader(args.image_feature_dir, args.data_path, src_vocab, tgt_vocab,
-                                   batch_size=args.batch_size, type='train', shuffle=False)
+                                   batch_size=args.batch_size, type='train', shuffle=False,
+                                   src_lg=args.src_language, tgt_lg=args.tgt_language)
     val_data_loader = get_loader(args.image_feature_dir, args.data_path, src_vocab, tgt_vocab,
-                                 batch_size=1, type='val', shuffle=False)
+                                 batch_size=1, type='val', shuffle=False,
+                                 src_lg=args.src_language, tgt_lg=args.tgt_language)
 
     # Initialization
     print('Initializing...')
@@ -294,6 +296,13 @@ def main(args):
                          args.output_dropout_rate, args.num_layers)
     decoder = TextAttnDecoderGRU(args.attn_model, tgt_embedding, args.hidden_size, len(tgt_vocab), args.num_layers,
                                  args.output_dropout_rate)
+
+    ############## New code 3.14 ##############
+    if torch.cuda.device_count() > 1:
+        print("Let's use", torch.cuda.device_count(), "GPUs!")
+        encoder = nn.DataParallel(encoder)
+        decoder = nn.DataParallel(decoder)
+
     if args.file_name:
         encoder.load_state_dict(encoder_sd)
         decoder.load_state_dict(decoder_sd)

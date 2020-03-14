@@ -34,6 +34,7 @@ class EncoderGRU(nn.Module):
         :return: output: size = (src_max_len, batch, hidden_size), 双向输出之和
         :return: hidden: size = (num_layers * num_directions, batch, hidden_size), 最后一个token的隐藏层
         '''
+        print("\tIn Ebcoder: input size", src.size())
         embedded = self.embedding(src)
         packed = nn.utils.rnn.pack_padded_sequence(embedded, src_lengths)
         outputs, hidden = self.gru(packed, hidden)
@@ -123,6 +124,7 @@ class TextAttnDecoderGRU(nn.Module):
         :return hidden: size = (n_layers * num_directions, batch, hidden_size)
         '''
 
+        print("\tIn Decoder: input size", input.size())
         embedded = self.embedding(input)
         embedded = self.embedding_dropout(embedded)
         output, hidden = self.gru(embedded, last_hidden)  ## output: size = (1, batch, hidden_size)
