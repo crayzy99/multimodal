@@ -20,9 +20,19 @@ def to_var(x, volatile=False):
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+def path2sentence(path, vocab):
+    ans_str = ''
+    for i, idx in enumerate(path):
+        if idx == vocab('<end>'):
+            break
+        ans_str += vocab.idx2word[idx.item()] + ' '
+    return ans_str
+
 def evaluate(encoder, decoder, src_embedding, tgt_embedding, src_vocab, tgt_vocab, args):
     test_data_loader = get_loader(args.image_feature_dir, args.data_path, src_vocab, tgt_vocab,
-                                   batch_size=1, type='val', shuffle=False)
+                                   batch_size=1, type='val', shuffle=False,
+                                   src_lg=args.src_language,
+                                   tgt_lg=args.tgt_language)
 
     print("Total test examples:", len(test_data_loader))
     print("Start testing!")
@@ -58,7 +68,7 @@ def evaluate(encoder, decoder, src_embedding, tgt_embedding, src_vocab, tgt_voca
         end_vocab = vocab('<end>')
         forbidden_list = [vocab('<pad>'), vocab('<start>'), vocab('<unk>')]
         termination_list = [vocab('.'), vocab('?'), vocab('!')]
-        function_list = [vocab('<end>'), vocab('.'), vocab('?'), vocab('!'), vocab('a'), vocab('an'), vocab('am'),
+        function_list = [vocab('.'), vocab('?'), vocab('!'), vocab('a'), vocab('an'), vocab('am'),
                          vocab('is'), vocab('was'), vocab('are'), vocab('were'), vocab('do'), vocab('does'),
                          vocab('did')]
         
@@ -87,26 +97,29 @@ def evaluate(encoder, decoder, src_embedding, tgt_embedding, src_vocab, tgt_voca
                 # 禁止输出fobidden tokens
                 for forbidden in forbidden_list:
                     decoder_output[forbidden] = -1000.0
-        
+                if last_word_idx in function_list:
+                    for word in function_list:
+                        decoder_output[word] = -1000.0
+
                 output_prob = F.softmax(decoder_output, dim=0)  # shape = (hidden_size,) prob_like
                 values, indices = torch.topk(output_prob, beam_size)
                 for ix in range(beam_size):
                     new_paths.append([(prev_path + [indices[ix]], decoder_hidden), prob + torch.log(values[ix] + 1e-6)])
         
             # 现在new_paths里应该有beam_size**2个条目
-            sorted_paths = sorted(new_paths, key=operator.itemgetter(1))
+            sorted_paths = sorted(new_paths, key=operator.itemgetter(1),
+                    reverse=True)
             prev_paths = sorted_paths[:beam_size]
+#            print("The picked paths of step {}:".format(t))
+#            for i in range(len(sorted_paths)):
+#                print(path2sentence(prev_paths[i][0][0], tgt_vocab))
             new_paths = []
         
         assert len(prev_paths) > 0
         ans = prev_paths[0][0][0]
 
         print("Decoding sample {}/{}".format(bi, len(test_data_loader)))
-        ans_str = ''
-        for i, idx in enumerate(ans):
-            if idx == tgt_vocab('<end>'):
-                break
-            ans_str += tgt_vocab.idx2word[idx.item()] + ' '
+        ans_str = path2sentence(ans, tgt_vocab)
         results.append(ans_str)
         
     with open("results.txt", "w") as f:
@@ -138,9 +151,15 @@ def main(args):
     if not os.path.exists(args.model_path):
         os.makedirs(args.model_path)
 
-    with open(args.src_vocab_path, 'rb') as f:
+    vocab_path = args.model_path + args.src_language + '-' + args.tgt_language + '/'
+    if not os.path.exists(vocab_path):
+        os.makedirs(vocab_path)
+    src_vocab_path = vocab_path + 'src_vocab.pkl'
+    tgt_vocab_path = vocab_path + 'tgt_vocab.pkl'
+
+    with open(src_vocab_path, 'rb') as f:
         src_vocab = pickle.load(f)
-    with open(args.tgt_vocab_path, 'rb') as f:
+    with open(tgt_vocab_path, 'rb') as f:
         tgt_vocab = pickle.load(f)
     torch.cuda.set_device(args.cuda_num)
 
@@ -153,6 +172,7 @@ def main(args):
     print('Building encoder and decoder...')
     src_embedding = nn.Embedding(len(src_vocab), args.embed_size)
     tgt_embedding = nn.Embedding(len(tgt_vocab), args.embed_size)
+    print(len(src_vocab))
     if args.file_name:
         src_embedding.load_state_dict(src_embedding_sd)
         tgt_embedding.load_state_dict(tgt_embedding_sd)

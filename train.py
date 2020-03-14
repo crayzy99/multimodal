@@ -160,9 +160,13 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
     print_every = args.print_every
     # load batches
     train_data_loader = get_loader(args.image_feature_dir, args.data_path, src_vocab, tgt_vocab,
-                                   batch_size=args.batch_size, type='train', shuffle=False)
+                                   batch_size=args.batch_size, type='train',
+                                   shuffle=False, src_lg=args.src_language,
+                                   tgt_lg=args.tgt_language)
     val_data_loader = get_loader(args.image_feature_dir, args.data_path, src_vocab, tgt_vocab,
-                                 batch_size=1, type='val', shuffle=False)
+                                 batch_size=1, type='val', shuffle=False,
+                                 src_lg=args.src_language,
+                                 tgt_lg=args.tgt_language)
 
     # Initialization
     print('Initializing...')
@@ -268,9 +272,15 @@ def main(args):
     if not os.path.exists(args.model_path):
         os.makedirs(args.model_path)
 
-    with open(args.src_vocab_path, 'rb') as f:
+    vocab_path = args.model_path + args.src_language + '-' + args.tgt_language + '/'
+    if not os.path.exists(vocab_path):
+        os.makedirs(vocab_path)
+    src_vocab_path = vocab_path + 'src_vocab.pkl'
+    tgt_vocab_path = vocab_path + 'tgt_vocab.pkl'
+
+    with open(src_vocab_path, 'rb') as f:
         src_vocab = pickle.load(f)
-    with open(args.tgt_vocab_path, 'rb') as f:
+    with open(tgt_vocab_path, 'rb') as f:
         tgt_vocab = pickle.load(f)
 
     torch.cuda.set_device(args.cuda_num)
