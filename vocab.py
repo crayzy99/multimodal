@@ -3,6 +3,7 @@ import argparse
 from collections import Counter
 from util import *
 import os
+from sentencepiece import generate_encoding_model
 
 
 class Vocabulary(object):
@@ -26,9 +27,7 @@ class Vocabulary(object):
         return len(self.word2idx)
 
 
-def build_vocab(data_path, threshold, src_language, tgt_language):
-    raw_data = RawDataset(data_path, types=['train', 'val', 'test'],
-                          src_language=src_language, tgt_language=tgt_language)
+def build_vocab(raw_data, threshold):
     src_counter = Counter()
     tgt_counter = Counter()
 
@@ -69,18 +68,28 @@ def build_vocab(data_path, threshold, src_language, tgt_language):
     print(src_vocab.word2idx.keys())
     return src_vocab, tgt_vocab
 
-
 def main(args):
-    src_vocab, tgt_vocab = build_vocab(args.data_path, args.threshold, args.src_language, args.tgt_language)
-    vocab_path = args.model_path + args.src_language + '-' + args.tgt_language + '/'
-    if not os.path.exists(vocab_path):
-        os.makedirs(vocab_path)
-    src_vocab_path = vocab_path + 'src_vocab.pkl'
-    tgt_vocab_path = vocab_path + 'tgt_vocab.pkl'
+    raw_data = RawDataset(args.data_path, types=['train', 'val', 'test'],
+                          src_language=args.src_language, tgt_language=args.tgt_language)
+    bpe_data = BPEDataset(args.data_path, types=['train', 'val', 'test'],
+                          src_language=args.src_language, tgt_language=args.tgt_language)
+    src_vocab, tgt_vocab = build_vocab(raw_data, args.threshold)
+    src_bpe_vocab, tgt_bpe_vocab = build_vocab(bpe_data, 0)
+    src_vocab_path = args.src_vocab_path
+    tgt_vocab_path = args.tgt_vocab_path
+    src_encoding_path = args.src_encoding_path
+    tgt_encoding_path = args.tgt_encoding_path
+    if not os.path.exists('models/'):
+        os.makedirs('models/')
     with open(src_vocab_path, 'wb') as f:
         pickle.dump(src_vocab, f)
     with open(tgt_vocab_path, 'wb') as f:
         pickle.dump(tgt_vocab, f)
+    with open(src_encoding_path_path, 'wb') as f:
+        pickle.dump(src_bpe_vocab, f)
+    with open(tgt_encoding_path, 'wb') as f:
+        pickle.dump(tgt_bpe_vocab, f)
+
 
     print('Total source vocabulary size: %d' % len(src_vocab))
     print("Saved the source vocabulary wrapper to '%s'" % src_vocab_path)
@@ -91,9 +100,14 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_path', type=str, default='dataset/data/task1/tok/')
+    parser.add_argument('--src_vocab_path', type=str, default='./models/src_vocab.pkl')
     parser.add_argument('--image_feature_dir', type=str, default='../features_resnet50/')
+    parser.add_argument('--tgt_vocab_path', type=str, default='./models/tgt_vocab.pkl')
+    parser.add_argument('--src_encoding_path', type=str, default='./models/src_bpe_vocab.pkl')
+    parser.add_argument('--tgt_encoding_path', type=str, default='./models/tgt_bpe_vocab.pkl')
+    parser.add_argument('--src_vocab_size', type=int, default=4000)
+    parser.add_argument('--tgt_vocab_size', type=int, default=6000)
     parser.add_argument('--threshold', type=int, default=3)
-    parser.add_argument('--model_path', type=str, default='models/')
     parser.add_argument('--src_language', type=str, default='en')
     parser.add_argument('--tgt_language', type=str, default='de')
     args = parser.parse_args()

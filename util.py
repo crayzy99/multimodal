@@ -49,6 +49,27 @@ class RawDataset:
             if line[-1] == '\n':
                 self.src[i] = line[:-1]
 
+class BPEDataset:
+    def __init__(self, data_path, types, src_language, tgt_language):
+        ## 此为构造词表所需，为方便起见把训练集也加入词表构建了
+        self.src = []
+        self.tgt = []
+        for t in types:
+            src_file = data_path + t + '.' + src_language + '.bpe'
+            tgt_file = data_path + t + '.' + tgt_language + '.bpe'
+            with open(src_file, 'r') as f:
+                self.src += f.readlines()
+            with open(tgt_file, 'r') as f:
+                self.tgt += f.readlines()
+
+        for i, line in enumerate(self.tgt):
+            if line[-1] == '\n':
+                self.tgt[i] = line[:-1]
+
+        for i, line in enumerate(self.src):
+            if line[-1] == '\n':
+                self.src[i] = line[:-1]
+
 def maskedNLLLoss(out, target, mask):
     '''
     :param out: size = (batch, output_size), prob_like
