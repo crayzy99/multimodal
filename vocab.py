@@ -72,10 +72,11 @@ def build_vocab(data_path, threshold, src_language, tgt_language):
 
 def main(args):
     src_vocab, tgt_vocab = build_vocab(args.data_path, args.threshold, args.src_language, args.tgt_language)
-    src_vocab_path = args.src_vocab_path
-    tgt_vocab_path = args.tgt_vocab_path
-    if not os.path.exists('models/'):
-        os.makedirs('models/')
+    vocab_path = args.model_path + args.src_language + '-' + args.tgt_language + '/'
+    if not os.path.exists(vocab_path):
+        os.makedirs(vocab_path)
+    src_vocab_path = vocab_path + 'src_vocab.pkl'
+    tgt_vocab_path = vocab_path + 'tgt_vocab.pkl'
     with open(src_vocab_path, 'wb') as f:
         pickle.dump(src_vocab, f)
     with open(tgt_vocab_path, 'wb') as f:
@@ -90,10 +91,9 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_path', type=str, default='dataset/data/task1/tok/')
-    parser.add_argument('--src_vocab_path', type=str, default='./models/src_vocab.pkl')
     parser.add_argument('--image_feature_dir', type=str, default='../features_resnet50/')
-    parser.add_argument('--tgt_vocab_path', type=str, default='./models/tgt_vocab.pkl')
     parser.add_argument('--threshold', type=int, default=3)
+    parser.add_argument('--model_path', type=str, default='models/')
     parser.add_argument('--src_language', type=str, default='en')
     parser.add_argument('--tgt_language', type=str, default='de')
     args = parser.parse_args()

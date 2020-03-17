@@ -304,6 +304,13 @@ def main(args):
                          args.output_dropout_rate, args.num_layers)
     decoder = TextAttnDecoderGRU(args.attn_model, tgt_embedding, args.hidden_size, len(tgt_vocab), args.num_layers,
                                  args.output_dropout_rate)
+    ############## New code 3.14 ##############
+    if torch.cuda.device_count() > 1:
+        print("Let's use", torch.cuda.device_count(), "GPUs!")
+        encoder = nn.DataParallel(encoder)
+        decoder = nn.DataParallel(decoder)
+    ############## New code end  ##############
+
     if args.file_name:
         encoder.load_state_dict(encoder_sd)
         decoder.load_state_dict(decoder_sd)
