@@ -8,7 +8,7 @@ import numpy as np
 from data_loader import get_loader
 from vocab import Vocabulary
 from util import *
-from model import EncoderGRU, LuongAttention, TextAttnDecoderGRU
+from model import EncoderGRU, LuongAttention, TextAttnDecoderGRU, DIRECTDecoder
 import os
 import pickle
 import random
@@ -24,7 +24,7 @@ def to_var(x):
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
-          decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, teacher_forcing_ratio):
+          decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, teacher_forcing_ratio, image_features):
     '''
     :param sources: size = (max_src_len, batch), 注意与一般情形是相反的
     :param targets: size = (max_tgt_len, batch)
@@ -52,6 +52,7 @@ def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
     sources = sources.to(device)
     targets = targets.to(device)
     lengths = lengths.to(device)
+    image_features = image_features.to(device)
     mask = mask.to(device)
 
     loss = 0
@@ -62,13 +63,24 @@ def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
     encoder_outputs, encoder_hidden = encoder(sources, lengths)
     decoder_input = torch.LongTensor([[tgt_vocab('<start>') for _ in range(batch_size)]])  ## size = (1, batch)
     decoder_input = decoder_input.to(device)
-    decoder_hidden = encoder_hidden[:decoder.n_layers]
+    if args.model_name == 'TEXT':
+        decoder_hidden = encoder_hidden[:decoder.n_layers]
+    else:
+        decoder_hidden = decoder.init_hidden(encoder_outputs)
     use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
 
     # Decoder逐步向前传播
     if use_teacher_forcing:
         for t in range(max_target_len):
-            decoder_output, decoder_hidden = decoder(decoder_input, decoder_hidden, encoder_outputs)
+            # TEXT
+            # decoder_output, decoder_hidden = decoder(
+            #      decoder_input, decoder_hidden, encoder_outputs
+            # )
+
+            # DIRECT
+            decoder_output, decoder_hidden = decoder(
+                decoder_input, decoder_hidden, encoder_outputs, image_features
+            )
             decoder_input = targets[t].view(1, -1)  ## 对于teacher_forcing情形，下一个cell的输入从ground truth中获得
             masked_loss, nTotal = maskedNLLLoss(decoder_output, targets[t], mask[t])
             loss += masked_loss
@@ -76,8 +88,14 @@ def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
             n_totals += nTotal
     else:
         for t in range(max_target_len):
+            # TEXT
             decoder_output, decoder_hidden = decoder(
                 decoder_input, decoder_hidden, encoder_outputs
+            )
+
+            # DIRECT
+            decoder_output, decoder_hidden = decoder(
+                decoder_input, decoder_hidden, encoder_outputs, image_features
             )
             # No teacher forcing: next input is decoder's own current output
             _, topi = decoder_output.topk(1)
@@ -100,7 +118,7 @@ def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
 
 
 def validate(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
-          decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len):
+          decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, image_features):
     '''
     :param sources: size = (max_src_len, batch), 注意与一般情形是相反的
     :param targets: size = (max_tgt_len, batch)
@@ -122,6 +140,7 @@ def validate(sources, targets, lengths, mask, encoder, decoder, encoder_optimize
     sources = sources.to(device)
     targets = targets.to(device)
     lengths = lengths.to(device)
+    image_features = image_features.to(device)
     mask = mask.to(device)
 
     loss = 0
@@ -137,8 +156,14 @@ def validate(sources, targets, lengths, mask, encoder, decoder, encoder_optimize
 
     # Decoder逐步向前传播
     for t in range(max_target_len):
+        # TEXT
+        # decoder_output, decoder_hidden = decoder(
+        #     decoder_input, decoder_hidden, encoder_outputs
+        # )
+
+        # DIRECT
         decoder_output, decoder_hidden = decoder(
-            decoder_input, decoder_hidden, encoder_outputs
+            decoder_input, decoder_hidden, encoder_outputs, image_features
         )
         # No teacher forcing: next input is decoder's own current output
         _, topi = decoder_output.topk(1)
@@ -160,7 +185,7 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
     print_every = args.print_every
     # load batches
     train_data_loader = get_loader(args.image_feature_dir, args.data_path, src_vocab, tgt_vocab,
-                                   batch_size=args.batch_size, type='train', shuffle=False,
+                                   batch_size=batch_size, type='train', shuffle=False,
                                    src_lg=args.src_language, tgt_lg=args.tgt_language)
     val_data_loader = get_loader(args.image_feature_dir, args.data_path, src_vocab, tgt_vocab,
                                  batch_size=1, type='val', shuffle=False,
@@ -192,7 +217,8 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
             max_target_len = torch.max(tgt_lengths)
             # TODO: 继续完成下面的训练步骤。思考问题：分布式训练；模型参数如何得到
             loss = train(sources, targets, src_lengths, mask, encoder, decoder, encoder_optimizer,
-                         decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, args.teacher_forcing_ratio)
+                         decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, args.teacher_forcing_ratio,
+                         image_features)
             print_loss += loss
             epoch_loss += loss
 
@@ -214,7 +240,8 @@ def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embe
             decoder.eval()
             max_target_len = torch.max(tgt_lengths)
             loss, batch_output = validate(sources, targets, src_lengths, mask, encoder, decoder, encoder_optimizer,  ## size = (batch_size, max_len)
-                                            decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len)
+                                            decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len,
+                                          image_features)
             decoder_output.append(batch_output)
             print_loss += loss
             eval_loss += loss
@@ -298,10 +325,14 @@ def main(args):
     if args.file_name:
         src_embedding.load_state_dict(src_embedding_sd)
         tgt_embedding.load_state_dict(tgt_embedding_sd)
-    encoder = EncoderGRU(args.embed_size, args.hidden_size, src_vocab, src_embedding, args.embedding_dropout_rate,
+    encoder = EncoderGRU(args.embed_size, args.hidden_size, src_vocab, src_embedding, args.model_name, args.embedding_dropout_rate,
                          args.output_dropout_rate, args.num_layers)
-    decoder = TextAttnDecoderGRU(args.attn_model, tgt_embedding, args.hidden_size, len(tgt_vocab), args.num_layers,
-                                 args.output_dropout_rate)
+    # TEXT
+    # decoder = TextAttnDecoderGRU(args.attn_model, tgt_embedding, args.hidden_size, len(tgt_vocab), args.num_layers,
+    #                              args.output_dropout_rate)
+
+    # DIRECT
+    decoder = DIRECTDecoder(args.attn_model, tgt_embedding, args.hidden_size, len(tgt_vocab), args.embed_size)
 
     ############## New code 3.14 ##############
     if torch.cuda.device_count() > 1:
@@ -364,6 +395,7 @@ if __name__ == '__main__':
     parser.add_argument('--src_language', type=str, default='en')
     parser.add_argument('--tgt_language', type=str, default='de')
     parser.add_argument('--file_name', type=str, default=None)
+    parser.add_argument('--model_name', type=str, default='TEXT')
     parser.add_argument('--attn_model', type=str, default='dot')
     parser.add_argument('--teacher_forcing_ratio', type=float, default=1)
     parser.add_argument('--train_length', type=float, default=1)

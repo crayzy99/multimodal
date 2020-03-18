@@ -10,7 +10,7 @@ import torch.nn.functional as F
 class EncoderGRU(nn.Module):
     ## 一个简单的LSTM模型
     ## 可能的改进方向：加入BPE或者german compound word splitting.
-    def __init__(self, embed_size, hidden_size, vocab, embedding, embed_dropout_rate=0.4, output_dropout_rate=0.5,
+    def __init__(self, embed_size, hidden_size, vocab, embedding, model_name, embed_dropout_rate=0.4, output_dropout_rate=0.5,
                  num_layers=1):
         super(EncoderGRU, self).__init__()
 
@@ -23,6 +23,7 @@ class EncoderGRU(nn.Module):
                               num_layers=num_layers, bidirectional=True)
         self.embedding_dropout = nn.Dropout(embed_dropout_rate)
         self.output_dropout = nn.Dropout(output_dropout_rate)
+        self.model_name = model_name  # 若为'DIRECT'，则最后的输出采用双向输出concat而非加和
 
     def get_params(self):
         return list(self.gru.parameters())
@@ -39,7 +40,10 @@ class EncoderGRU(nn.Module):
         packed = nn.utils.rnn.pack_padded_sequence(embedded, src_lengths)
         outputs, hidden = self.gru(packed, hidden)
         outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs)
-        outputs = outputs[:, :, :self.hidden_size] + outputs[:, : ,self.hidden_size:]
+        if self.model_name == 'TEXT':
+            outputs = outputs[:, :, :self.hidden_size] + outputs[:, : ,self.hidden_size:]
+        else:
+            outputs = torch.cat(outputs[:, :, :self.hidden_size], outputs[:, : ,self.hidden_size:], dim=2)
 
         outputs = self.output_dropout(outputs)
 
@@ -48,14 +52,14 @@ class EncoderGRU(nn.Module):
 class LuongAttention(nn.Module):
     ## 这里考虑decoding中每一步分别执行attention，所以用来做attention的decoder_output为[1, batch, hidden_size]
 
-    def __init__(self, method, hidden_size):
+    def __init__(self, method, hidden_size, encoder_output_size):
         super(LuongAttention, self).__init__()
         self.method = method
         self.hidden_size = hidden_size
         if method == 'general':
-            self.attn = nn.Linear(hidden_size, hidden_size)
+            self.attn = nn.Linear(encoder_output_size, hidden_size)
         elif method == 'concat':
-            self.attn = nn.Linear(2*hidden_size, hidden_size)
+            self.attn = nn.Linear(hidden_size+encoder_output_size, hidden_size)
             self.v = nn.Parameter(torch.FloatTensor(hidden_size))
 
     def dot_score(self, hidden, encoder_output):
@@ -113,7 +117,7 @@ class TextAttnDecoderGRU(nn.Module):
         self.concat = nn.Linear(hidden_size * 2, hidden_size)
         self.out = nn.Linear(hidden_size, output_size)
 
-        self.attn = LuongAttention(attn_model, hidden_size)
+        self.attn = LuongAttention(attn_model, hidden_size, hidden_size)
 
     def forward(self, input, last_hidden, encoder_outputs):
         '''
@@ -136,6 +140,58 @@ class TextAttnDecoderGRU(nn.Module):
         concat_output = self.concat(concat_input)
         output = self.out(concat_output)
         output = F.softmax(output, dim=1)
+
+        return output, hidden
+
+
+class DIRECTDecoder(nn.Module):
+    def __init__(self, attn_model, embedding, hidden_size, output_size, embed_size):
+        super(DIRECTDecoder, self).__init__()
+        # Keep for reference
+        self.attn_model = attn_model
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        self.n_layers = n_layers
+        self.embed_size = embed_size
+        #Define layers
+        self.embedding = embedding
+        self.W_init = nn.Linear(2*hidden_size, hidden_size)
+        self.W_fus = nn.Linear(4*hidden_size, 2*hidden_size)
+        self.L_o = nn.Linear(embed_size, output_size)
+        self.L_s = nn.Linear(hidden_size, embed_size)
+        self.L_c = nn.Linear(2*hidden_size, embed_size)
+        self.gru_1 = nn.GRU(input_size=embed_size, hidden_size=hidden_size, n_layers=1)
+        self.gru_2 = nn.GRU(input_size=2*hidden_size, hidden_size=hidden_size, n_layers=1)
+        self.text_attention = LuongAttention(attn_model, hidden_size, 2*hidden_size)
+        self.img_attention = LuongAttention(attn_model, hidden_size, 2*hidden_size)
+
+    def init_hidden(self, encoder_outputs):
+        hidden_1 = F.tanh(self.W_init(torch.mean(encoder_outputs, dim=0)))
+        hidden_2 = torch.zeros(encoder_outputs.shape[0], encoder_outputs.shape[1], self.hidden_size)
+        return torch.cat([hidden_1, hidden_2], dim=2)
+
+    def forward(self, input, last_hidden, encoder_outputs, image_features):
+        '''
+        :param input: (1, batch)
+        :param encoder_outputs: (src_max_len, batch, 2*hidden_size)
+        :param image_features: (196, batch, 2*hidden_size)
+        :return:
+        '''
+        embedded = self.embedding(input)
+        #embedded = self.embedding_dropout(embedded)
+        hidden_1 = last_hidden[:,:,:self.hidden_size]
+        hidden_2 = last_hidden[:,:,self.hidden_size:]
+        output_1, hidden_1 = self.gru_1(embedded, hidden_1)  ## output: size = (1, batch, hidden_size)
+        text_attn_weights = self.text_attention(output_1, encoder_outputs)
+        img_attn_weights = self.img_attention(output_1, image_features)
+        text_context = text_attn_weights.bmm(encoder_outputs.transpose(0, 1))  ## size = (batch, 1, 2*hidden)
+        img_context = img_attn_weights.bmm(image_features.transpose(0,1))  ## size = (batch, 1, 2*hidden)
+        context = F.tanh(self.W_fus(torch.cat([text_context, img_context], dim=2)))
+        output_2, hidden_2 = self.gru_2(context, hidden_2)   ## output: size = (1, batch, hidden_size)
+        output_2 = output_2.squeeze(0)  ## size = (batch, hidden_size)
+        context = context.squeeze(1)  ## size = (batch, 2*hidden)
+        output = F.softmax(self.L_o(F.tanh(self.L_s(output_2)+self.L_c(context)+embedded)))
+        hidden = torch.cat([hidden_1, hidden_2], dim=2)
 
         return output, hidden
 
