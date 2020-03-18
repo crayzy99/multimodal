@@ -22,8 +22,8 @@ class Flickr30k(data.Dataset):
             tgt_file = data_path + type + '_2016_flickr.lc.norm.tok.' + tgt_lg
             self.image_feature_dir = image_feature_dir + type + '_2016_flickr-resnet50-avgpool.npy'
         else:
-            src_file = data_path + type + '.lc.norm.tok.en'
-            tgt_file = data_path + type + '.lc.norm.tok.de'
+            src_file = data_path + type + '.lc.norm.tok.' + src_lg
+            tgt_file = data_path + type + '.lc.norm.tok.' + tgt_lg
             self.image_feature_dir = image_feature_dir + type + '-resnet50-avgpool.npy'
         with open(src_file, 'r', encoding='utf-8') as f:
             self.src += f.readlines()
@@ -98,7 +98,7 @@ def collate_fn(data):
     src_lengths = src_lengths[src_index]
     tgt_lengths = tgt_lengths[src_index]
     sources_tensor = sources_tensor[src_index]
-    targets_tensor = targets_tensor[src_index] 
+    targets_tensor = targets_tensor[src_index]
 
     mask = targets_tensor.ne(0)
     sources_tensor = sources_tensor.transpose(0,1)

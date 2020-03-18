@@ -270,9 +270,15 @@ def main(args):
     if not os.path.exists(args.model_path):
         os.makedirs(args.model_path)
 
-    with open(args.src_vocab_path, 'rb') as f:
+    vocab_path = args.model_path + args.src_language + '-' + args.tgt_language + '/'
+    if not os.path.exists(vocab_path):
+        os.makedirs(vocab_path)
+    src_vocab_path = vocab_path + 'src_vocab.pkl'
+    tgt_vocab_path = vocab_path + 'tgt_vocab.pkl'
+
+    with open(src_vocab_path, 'rb') as f:
         src_vocab = pickle.load(f)
-    with open(args.tgt_vocab_path, 'rb') as f:
+    with open(tgt_vocab_path, 'rb') as f:
         tgt_vocab = pickle.load(f)
 
     torch.cuda.set_device(args.cuda_num)
@@ -302,6 +308,7 @@ def main(args):
         print("Let's use", torch.cuda.device_count(), "GPUs!")
         encoder = nn.DataParallel(encoder)
         decoder = nn.DataParallel(decoder)
+    ############## New code end  ##############
 
     if args.file_name:
         encoder.load_state_dict(encoder_sd)
