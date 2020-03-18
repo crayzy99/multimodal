@@ -8,7 +8,6 @@ import numpy as np
 from data_loader import get_loader
 from vocab import Vocabulary
 from util import *
-from model import EncoderGRU, LuongAttention, TextAttnDecoderGRU, DIRECTDecoder
 import os
 import pickle
 import random
@@ -22,6 +21,7 @@ def to_var(x):
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 
 def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
           decoder_optimizer, src_vocab, tgt_vocab, args, max_target_len, teacher_forcing_ratio, image_features):
@@ -60,27 +60,18 @@ def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
     n_totals = 0
 
     # 前向传播
-    encoder_outputs, encoder_hidden = encoder(sources, lengths)
+    encoder_outputs, encoder_hidden, image_features = encoder_forward(args.model_name, encoder,
+                                                                      sources, lengths, image_features)
     decoder_input = torch.LongTensor([[tgt_vocab('<start>') for _ in range(batch_size)]])  ## size = (1, batch)
     decoder_input = decoder_input.to(device)
-    if args.model_name == 'TEXT':
-        decoder_hidden = encoder_hidden[:decoder.n_layers]
-    else:
-        decoder_hidden = decoder.init_hidden(encoder_outputs)
+    decoder_hidden = decoder.init_hidden(encoder_outputs,  encoder_hidden)
     use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
 
     # Decoder逐步向前传播
     if use_teacher_forcing:
         for t in range(max_target_len):
-            # TEXT
-            # decoder_output, decoder_hidden = decoder(
-            #      decoder_input, decoder_hidden, encoder_outputs
-            # )
-
-            # DIRECT
-            decoder_output, decoder_hidden = decoder(
-                decoder_input, decoder_hidden, encoder_outputs, image_features
-            )
+            decoder_output, decoder_hidden = decoder_forward(decoder_input, decoder_hidden,
+                                                             encoder_outputs, image_features)
             decoder_input = targets[t].view(1, -1)  ## 对于teacher_forcing情形，下一个cell的输入从ground truth中获得
             masked_loss, nTotal = maskedNLLLoss(decoder_output, targets[t], mask[t])
             loss += masked_loss
@@ -88,15 +79,9 @@ def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
             n_totals += nTotal
     else:
         for t in range(max_target_len):
-            # TEXT
-            decoder_output, decoder_hidden = decoder(
-                decoder_input, decoder_hidden, encoder_outputs
-            )
+            decoder_output, decoder_hidden = decoder_forward(decoder_input, decoder_hidden,
+                                                             encoder_outputs, image_features)
 
-            # DIRECT
-            decoder_output, decoder_hidden = decoder(
-                decoder_input, decoder_hidden, encoder_outputs, image_features
-            )
             # No teacher forcing: next input is decoder's own current output
             _, topi = decoder_output.topk(1)
             decoder_input = torch.LongTensor([[topi[i][0] for i in range(batch_size)]])
@@ -148,23 +133,18 @@ def validate(sources, targets, lengths, mask, encoder, decoder, encoder_optimize
     n_totals = 0
 
     # 前向传播
-    encoder_outputs, encoder_hidden = encoder(sources, lengths)
+    encoder_outputs, encoder_hidden, image_features = encoder_forward(args.model_name, encoder,
+                                                                      sources, lengths, image_features)
     decoder_input = torch.LongTensor([[tgt_vocab('<start>') for _ in range(batch_size)]])  ## size = (1, batch)
     decoder_input = decoder_input.to(device)
-    decoder_hidden = encoder_hidden[:decoder.n_layers]
+    decoder_hidden = decoder.init_hidden(encoder_outputs, encoder_hidden)
     batch_result = torch.zeros((max_target_len, batch_size))
 
     # Decoder逐步向前传播
     for t in range(max_target_len):
-        # TEXT
-        # decoder_output, decoder_hidden = decoder(
-        #     decoder_input, decoder_hidden, encoder_outputs
-        # )
+        decoder_output, decoder_hidden = decoder_forward(decoder_input, decoder_hidden,
+                                                         encoder_outputs, image_features)
 
-        # DIRECT
-        decoder_output, decoder_hidden = decoder(
-            decoder_input, decoder_hidden, encoder_outputs, image_features
-        )
         # No teacher forcing: next input is decoder's own current output
         _, topi = decoder_output.topk(1)
         decoder_input = torch.LongTensor([[topi[i][0] for i in range(batch_size)]])  ## size = (1,batch)
@@ -325,14 +305,7 @@ def main(args):
     if args.file_name:
         src_embedding.load_state_dict(src_embedding_sd)
         tgt_embedding.load_state_dict(tgt_embedding_sd)
-    encoder = EncoderGRU(args.embed_size, args.hidden_size, src_vocab, src_embedding, args.model_name, args.embedding_dropout_rate,
-                         args.output_dropout_rate, args.num_layers)
-    # TEXT
-    # decoder = TextAttnDecoderGRU(args.attn_model, tgt_embedding, args.hidden_size, len(tgt_vocab), args.num_layers,
-    #                              args.output_dropout_rate)
-
-    # DIRECT
-    decoder = DIRECTDecoder(args.attn_model, tgt_embedding, args.hidden_size, len(tgt_vocab), args.embed_size)
+    encoder, decoder = get_model(args)
 
     ############## New code 3.14 ##############
     if torch.cuda.device_count() > 1:
@@ -395,7 +368,6 @@ if __name__ == '__main__':
     parser.add_argument('--src_language', type=str, default='en')
     parser.add_argument('--tgt_language', type=str, default='de')
     parser.add_argument('--file_name', type=str, default=None)
-    parser.add_argument('--model_name', type=str, default='TEXT')
     parser.add_argument('--attn_model', type=str, default='dot')
     parser.add_argument('--teacher_forcing_ratio', type=float, default=1)
     parser.add_argument('--train_length', type=float, default=1)

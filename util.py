@@ -1,6 +1,7 @@
 import torch
 import torch.optim as optim
 import torch.nn as nn
+from model import EncoderGRU, LuongAttention, TextAttnDecoderGRU, DIRECTDecoder, DIRECTEncoder
 
 device = torch.device("cuda" if torch.cuda.is_available else "cpu")
 
@@ -72,4 +73,40 @@ def binaryMatrix(l, value=0):
             else:
                 m[i].append(1)
     return m
+
+
+def encoder_forward(model_name, encoder, sources, lengths, image_features):
+    if model_name == 'seq2seq-text':
+        encoder_outputs, encoder_hidden, image_features = encoder(sources, lengths)
+    elif model_name == 'DIRECT':
+        encoder_outputs, encoder_hidden, image_features = encoder(sources, lengths, image_features)
+
+    return encoder_outputs, encoder_hidden, image_features
+
+
+def decoder_forward(decoder_input, decoder_hidden,
+                    encoder_outputs, image_features)
+    if args.model_name == 'TEXT':
+        decoder_output, decoder_hidden = decoder(
+            decoder_input, decoder_hidden, encoder_outputs
+        )
+    elif args.model_name == 'DIRECT':
+        decoder_output, decoder_hidden = decoder(
+            decoder_input, decoder_hidden, encoder_outputs, image_features
+        )
+
+    return decoder_output, decoder_hidden
+
+def get_model(args):
+    if args.model_name == 'seq2seq2-text':
+        encoder = EncoderGRU(args.embed_size, args.hidden_size, src_vocab, src_embedding, args.embedding_dropout_rate,
+                         args.output_dropout_rate, args.num_layers)
+        decoder = TextAttnDecoderGRU(args.attn_model, tgt_embedding, args.hidden_size, len(tgt_vocab), args.num_layers,
+                                     args.output_dropout_rate)
+    elif args.model_name == 'DIRECT':
+        encoder = DIRECTEncoder(args.embed_size, args.hidden_size, src_vocab, src_embedding, args.embedding_dropout_rate,
+                         args.output_dropout_rate, args.num_layers)
+        decoder = DIRECTDecoder(args.attn_model, tgt_embedding, args.hidden_size, len(tgt_vocab), args.embed_size)
+
+    return encoder, decoder
 

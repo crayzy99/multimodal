@@ -51,10 +51,9 @@ def evaluate(encoder, decoder, src_embedding, tgt_embedding, src_vocab, tgt_voca
         lengths = src_lengths.to(device)
 
         # 前向传播
-        encoder_outputs, encoder_hidden = encoder(sources, lengths)
-        decoder_input = torch.LongTensor([[tgt_vocab('<start>') for _ in range(batch_size)]])  ## size = (1, batch)
-        decoder_input = decoder_input.to(device)
-        decoder_hidden = encoder_hidden[:decoder.n_layers]
+        encoder_outputs, encoder_hidden, image_features = encoder_forward(args.model_name, encoder,
+                                                                          sources, lengths, image_features)
+        decoder_hidden = decoder.init_hidden(encoder_outputs, encoder_hidden)
 
         # prev_paths保存目前概率最高的k个path（初始只有一个）. 列表元素有两个，第一个是一个tuple保存路径（也是一个列表）以及
         # 生成下一个token所需的hidden_state
@@ -63,7 +62,6 @@ def evaluate(encoder, decoder, src_embedding, tgt_embedding, src_vocab, tgt_voca
         prev_paths = [[([idx], decoder_hidden), 1.0]]
         # new_paths保存下一个token可能的情况，计算完成后将会有k**2个条目，
         new_paths = []
-        hidden_size = args.hidden_size
         beam_size = args.beam_size
         end_vocab = vocab('<end>')
         forbidden_list = [vocab('<pad>'), vocab('<start>'), vocab('<unk>')]
@@ -87,9 +85,8 @@ def evaluate(encoder, decoder, src_embedding, tgt_embedding, src_vocab, tgt_voca
                 # 过decoder
                 decoder_input = torch.LongTensor([[last_word_idx]])
                 decoder_input = decoder_input.to(device)
-                decoder_output, decoder_hidden = decoder(
-                    decoder_input, prev_hidden, encoder_outputs
-                )
+                decoder_output, decoder_hidden = decoder_forward(decoder_input, decoder_hidden,
+                                                                 encoder_outputs, image_features)
                 decoder_output = decoder_output.squeeze().squeeze()  # shape = (hidden_size,) 未经softmax
                 # 如果上一个词不是终止token（标点符号），则禁止输出eof
                 if last_word_idx not in termination_list:
@@ -176,10 +173,7 @@ def main(args):
     if args.file_name:
         src_embedding.load_state_dict(src_embedding_sd)
         tgt_embedding.load_state_dict(tgt_embedding_sd)
-    encoder = EncoderGRU(args.embed_size, args.hidden_size, src_vocab, src_embedding, args.embedding_dropout_rate,
-                         args.output_dropout_rate, args.num_layers)
-    decoder = TextAttnDecoderGRU(args.attn_model, tgt_embedding, args.hidden_size, len(tgt_vocab), args.num_layers,
-                                 args.output_dropout_rate)
+    encoder, decoder = get_model(args)
     if args.file_name:
         encoder.load_state_dict(encoder_sd)
         decoder.load_state_dict(decoder_sd)
@@ -221,6 +215,7 @@ if __name__ == '__main__':
     parser.add_argument('--src_language', type=str, default='en')
     parser.add_argument('--tgt_language', type=str, default='de')
     parser.add_argument('--file_name', type=str, default=None)
+    parser.add_argument('--model_name', type=str, default='TEXT')
     parser.add_argument('--attn_model', type=str, default='dot')
     parser.add_argument('--teacher_forcing_ratio', type=float, default=1)
     parser.add_argument('--train_length', type=float, default=1)
