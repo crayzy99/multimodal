@@ -190,7 +190,6 @@ class DIRECTDecoder(nn.Module):
         self.attn_model = attn_model
         self.hidden_size = hidden_size
         self.output_size = output_size
-        self.n_layers = n_layers
         self.embed_size = embed_size
         #Define layers
         self.embedding = embedding
@@ -199,8 +198,8 @@ class DIRECTDecoder(nn.Module):
         self.L_o = nn.Linear(embed_size, output_size)
         self.L_s = nn.Linear(hidden_size, embed_size)
         self.L_c = nn.Linear(2*hidden_size, embed_size)
-        self.gru_1 = nn.GRU(input_size=embed_size, hidden_size=hidden_size, n_layers=1)
-        self.gru_2 = nn.GRU(input_size=2*hidden_size, hidden_size=hidden_size, n_layers=1)
+        self.gru_1 = nn.GRU(input_size=embed_size, hidden_size=hidden_size)
+        self.gru_2 = nn.GRU(input_size=2*hidden_size, hidden_size=hidden_size)
         self.text_attention = LuongAttention(attn_model, hidden_size, 2*hidden_size)
         self.img_attention = LuongAttention(attn_model, hidden_size, 2*hidden_size)
 

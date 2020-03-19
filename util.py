@@ -84,8 +84,8 @@ def encoder_forward(model_name, encoder, sources, lengths, image_features):
     return encoder_outputs, encoder_hidden, image_features
 
 
-def decoder_forward(decoder_input, decoder_hidden,
-                    encoder_outputs, image_features)
+def decoder_forward(decoder_input, decoder_hidden, encoder_outputs,
+        image_features):
     if args.model_name == 'TEXT':
         decoder_output, decoder_hidden = decoder(
             decoder_input, decoder_hidden, encoder_outputs
@@ -97,7 +97,7 @@ def decoder_forward(decoder_input, decoder_hidden,
 
     return decoder_output, decoder_hidden
 
-def get_model(args):
+def get_model(args, src_vocab, tgt_vocab, src_embedding, tgt_embedding):
     if args.model_name == 'seq2seq2-text':
         encoder = EncoderGRU(args.embed_size, args.hidden_size, src_vocab, src_embedding, args.embedding_dropout_rate,
                          args.output_dropout_rate, args.num_layers)

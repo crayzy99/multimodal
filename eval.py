@@ -173,7 +173,7 @@ def main(args):
     if args.file_name:
         src_embedding.load_state_dict(src_embedding_sd)
         tgt_embedding.load_state_dict(tgt_embedding_sd)
-    encoder, decoder = get_model(args)
+    encoder, decoder = get_model(args, src_vocab, tgt_vocab, src_embedding, tgt_embedding)
     if args.file_name:
         encoder.load_state_dict(encoder_sd)
         decoder.load_state_dict(decoder_sd)
