@@ -22,8 +22,7 @@ class EncoderGRU(nn.Module):
         self.vocab_size = len(vocab)
         self.embedding = embedding
         self.embedding.weight.requires_grad = False
-        self.gru = nn.GRU(embed_size, hidden_size,
-                              num_layers=num_layers, bidirectional=True)
+        self.gru = nn.GRU(embed_size, hidden_size, num_layers=num_layers, bidirectional=True, batch_first=True)
         self.embedding_dropout = nn.Dropout(embed_dropout_rate)
         self.output_dropout = nn.Dropout(output_dropout_rate)
         self.model_name = model_name  # 若为'DIRECT'，则最后的输出采用双向输出concat而非加和
@@ -33,16 +32,16 @@ class EncoderGRU(nn.Module):
 
     def forward(self, src, src_lengths, hidden=None):
         '''
-        :param src: size = (src_max_len, batch), dtype=long
+        :param src: size = (batch, src_max_len), dtype=long
         :param src_lengths: size = (batch), batch中每一句的长度
-        :return: output: size = (src_max_len, batch, hidden_size), 双向输出之和
-        :return: hidden: size = (num_layers * num_directions, batch, hidden_size), 最后一个token的隐藏层
+        :return: output: size = (batch, src_max_len, hidden_size), 双向输出之和
+        :return: hidden: size = (batch, num_layers * num_directions, hidden_size), 最后一个token的隐藏层
         '''
         print("\tIn Encoder: input size", src.size())
         embedded = self.embedding(src)
-        packed = nn.utils.rnn.pack_padded_sequence(embedded, src_lengths)
+        packed = nn.utils.rnn.pack_padded_sequence(embedded, src_lengths, batch_first=True)
         outputs, hidden = self.gru(packed, hidden)
-        outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs)
+        outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
         outputs = outputs[:, :, :self.hidden_size] + outputs[:, : ,self.hidden_size:]
         outputs = self.output_dropout(outputs)
 
@@ -60,8 +59,7 @@ class DIRECTEncoder(nn.Module):
         self.vocab_size = len(vocab)
         self.embedding = embedding
         self.embedding.weight.requires_grad = False
-        self.gru = nn.GRU(embed_size, hidden_size,
-                              num_layers=num_layers, bidirectional=True)
+        self.gru = nn.GRU(embed_size, hidden_size, num_layers=num_layers, bidirectional=True, batch_first=True)
         self.embedding_dropout = nn.Dropout(embed_dropout_rate)
         self.output_dropout = nn.Dropout(output_dropout_rate)
         self.W_im = nn.Linear(1024, 2*hidden_size)
@@ -71,16 +69,16 @@ class DIRECTEncoder(nn.Module):
 
     def forward(self, src, src_lengths, image_features, hidden=None):
         '''
-        :param src: size = (src_max_len, batch), dtype=long
+        :param src: size = (batch, src_max_len), dtype=long
         :param src_lengths: size = (batch), batch中每一句的长度
-        :return: output: size = (src_max_len, batch, hidden_size), 双向输出之和
-        :return: hidden: size = (num_layers * num_directions, batch, hidden_size), 最后一个token的隐藏层
+        :return: output: size = (batch, src_max_len, hidden_size), 双向输出之和
+        :return: hidden: size = (batch, num_layers * num_directions, hidden_size), 最后一个token的隐藏层
         '''
         print("\tIn Encoder: input size", src.size())
         embedded = self.embedding(src)
-        packed = nn.utils.rnn.pack_padded_sequence(embedded, src_lengths)
+        packed = nn.utils.rnn.pack_padded_sequence(embedded, src_lengths, batch_first=True)
         outputs, hidden = self.gru(packed, hidden)
-        outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs)
+        outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
         outputs = torch.cat([outputs[:, :, :self.hidden_size], outputs[:, : ,self.hidden_size:]], dim=2)
         outputs = self.output_dropout(outputs)
         
@@ -89,7 +87,7 @@ class DIRECTEncoder(nn.Module):
 
 
 class LuongAttention(nn.Module):
-    ## 这里考虑decoding中每一步分别执行attention，所以用来做attention的decoder_output为[1, batch, hidden_size]
+    ## 这里考虑decoding中每一步分别执行attention，所以用来做attention的encoder_output为[batch, 1, hidden_size]
 
     def __init__(self, method, hidden_size, encoder_output_size):
         super(LuongAttention, self).__init__()
@@ -103,18 +101,15 @@ class LuongAttention(nn.Module):
 
     def dot_score(self, hidden, encoder_output):
         '''
-        :param hidden: size = (1, batch, hidden_size)
-        :param encoder_output: size = (src_max_len, batch, hidden_size)
-        :return: size = (src_max_len, batch), 其中第0维为source句子每一个token对应的attentionscore
+        :param hidden: size = (batch, 1, hidden_size)
+        :param encoder_output: size = (batch,src_max_len, hidden_size)
+        :return: size = (batch, src_max_len), 其中第1维为source句子每一个token对应的attentionscore
         下面两个函数的参数和输出相同
         '''
-        return torch.sum(hidden *  encoder_output, dim=2)
+        return torch.sum(hidden * encoder_output, dim=2)
 
     def general_score(self, hidden, encoder_output):
         energy = self.attn(encoder_output)
-        print("encoder_output:", encoder_output.shape)
-        print("energe:", energy.shape)
-        print("hidden:", hidden.shape)
         return torch.sum(hidden * energy, dim=2)
 
     def concat_score(self, hidden, encoder_output):
@@ -130,11 +125,8 @@ class LuongAttention(nn.Module):
         elif self.method == 'dot':
             attn_energies = self.dot_score(hidden, encoder_outputs)
 
-        # Transpose max_length and batch_size dimensions
-        attn_energies = attn_energies.t()  ## (batch, src_max_len)
-
         # Return the softmax normalized probability scores (with added dimension)
-        return F.softmax(attn_energies, dim=1).unsqueeze(1)  ## (batch, 1, src_max_len), 后续使用需要再进行一次transpose
+        return F.softmax(attn_energies, dim=1).unsqueeze(1)  ## (batch, 1, src_max_len)
 
 
 class TextAttnDecoderGRU(nn.Module):
@@ -155,7 +147,7 @@ class TextAttnDecoderGRU(nn.Module):
         # Define layers
         self.embedding = embedding
         self.embedding_dropout = nn.Dropout(dropout)
-        self.gru = nn.GRU(hidden_size, hidden_size, n_layers, dropout=(0 if n_layers == 1 else dropout))
+        self.gru = nn.GRU(hidden_size, hidden_size, n_layers, dropout=(0 if n_layers == 1 else dropout), batch_first=True)
         self.concat = nn.Linear(hidden_size * 2, hidden_size)
         self.out = nn.Linear(hidden_size, output_size)
 
@@ -167,19 +159,19 @@ class TextAttnDecoderGRU(nn.Module):
     def forward(self, input, last_hidden, encoder_outputs):
         '''
         :param input: size = (1, batch) 某一时刻的输入
-        :param last_hidden: size = (num_layers * num_directions, batch, hidden_size)
-        :param encoder_outputs: size = (tgt_max_len, batch, hidden_size)
+        :param last_hidden: size = (batch, num_layers * num_directions, hidden_size)
+        :param encoder_outputs: size = (batch, src_max_len, hidden_size)
         :return output: size = (batch, output_size), prob_like
-        :return hidden: size = (n_layers * num_directions, batch, hidden_size)
+        :return hidden: size = (batch, n_layers * num_directions, hidden_size)
         '''
 
         print("\tIn Decoder: input size", input.size())
         embedded = self.embedding(input)
         embedded = self.embedding_dropout(embedded)
-        output, hidden = self.gru(embedded, last_hidden)  ## output: size = (1, batch, hidden_size)
-        attn_weights = self.attn(output, encoder_outputs)  ## size = (batch, 1, hidden_size)
-        context = attn_weights.bmm(encoder_outputs.transpose(0,1))  ## size = (batch, 1, hidden)
-        output = output.squeeze(0)  ## size = (batch, hidden_size)
+        output, hidden = self.gru(embedded, last_hidden)  ## output: size = (batch, 1, hidden_size)
+        attn_weights = self.attn(output, encoder_outputs)  ## size = (batch, 1, src_max_len)
+        context = attn_weights.bmm(encoder_outputs)  ## size = (batch, 1, hidden)
+        output = output.squeeze(1)  ## size = (batch, hidden_size)
         context = context.squeeze(1)  ## size = (batch, hidden)
         concat_input = torch.cat((output, context), 1)
         concat_output = self.concat(concat_input)
@@ -204,24 +196,24 @@ class DIRECTDecoder(nn.Module):
         self.L_o = nn.Linear(embed_size, output_size)
         self.L_s = nn.Linear(hidden_size, embed_size)
         self.L_c = nn.Linear(2*hidden_size, embed_size)
-        self.gru_1 = nn.GRU(input_size=embed_size, hidden_size=hidden_size)
-        self.gru_2 = nn.GRU(input_size=2*hidden_size, hidden_size=hidden_size)
+        self.gru_1 = nn.GRU(input_size=embed_size, hidden_size=hidden_size, batch_first=True)
+        self.gru_2 = nn.GRU(input_size=2*hidden_size, hidden_size=hidden_size, batch_first=True)
         self.text_attention = LuongAttention(attn_model, hidden_size, 2*hidden_size)
         self.img_attention = LuongAttention(attn_model, hidden_size, 2*hidden_size)
 
     def init_hidden(self, encoder_outputs, encoder_hidden):
-        hidden_1 = F.tanh(self.W_init(torch.mean(encoder_outputs, dim=0)))
-        hidden_2 = torch.zeros(encoder_outputs.shape[1], self.hidden_size)
+        hidden_1 = F.tanh(self.W_init(torch.mean(encoder_outputs, dim=1)))
+        hidden_2 = torch.zeros(encoder_outputs.shape[0], self.hidden_size)
         hidden_1 = hidden_1.to(device)
         hidden_2 = hidden_2.to(device)
-        hidden = torch.cat([hidden_1, hidden_2], dim=1).unsqueeze(0)
+        hidden = torch.cat([hidden_1, hidden_2], dim=1).unsqueeze(1)
         return hidden
 
     def forward(self, input, last_hidden, encoder_outputs, image_features):
         '''
-        :param input: (1, batch)
-        :param encoder_outputs: (src_max_len, batch, 2*hidden_size)
-        :param image_features: (196, batch, 2*hidden_size)
+        :param input: (batch, 1)
+        :param encoder_outputs: (batch, src_max_len, 2*hidden_size)
+        :param image_features: (batch, 196, 2*hidden_size)
         :return:
         '''
         embedded = self.embedding(input)
@@ -232,12 +224,12 @@ class DIRECTDecoder(nn.Module):
         output_1, hidden_1 = self.gru_1(embedded, hidden_1)  ## output: size = (1, batch, hidden_size)
         text_attn_weights = self.text_attention(output_1, encoder_outputs)
         img_attn_weights = self.img_attention(output_1, image_features)
-        text_context = text_attn_weights.bmm(encoder_outputs.transpose(0, 1))  ## size = (batch, 1, 2*hidden)
+        text_context = text_attn_weights.bmm(encoder_outputs)  ## size = (batch, 1, 2*hidden)
 
         img_context = img_attn_weights.bmm(image_features)  ## size = (batch, 1, 2*hidden)
         context = F.tanh(self.W_fus(torch.cat([text_context, img_context], dim=2)))
-        output_2, hidden_2 = self.gru_2(context, hidden_2)   ## output: size = (1, batch, hidden_size)
-        output_2 = output_2.squeeze(0)  ## size = (batch, hidden_size)
+        output_2, hidden_2 = self.gru_2(context, hidden_2)   ## output: size = (batch, 1, hidden_size)
+        output_2 = output_2.squeeze(1)  ## size = (batch, hidden_size)
         context = context.squeeze(1)  ## size = (batch, 2*hidden)
         output = F.softmax(self.L_o(F.tanh(self.L_s(output_2)+self.L_c(context)+embedded)))
         hidden = torch.cat([hidden_1, hidden_2], dim=2)

@@ -63,7 +63,7 @@ def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
 
     encoder_outputs, encoder_hidden, image_features = encoder_forward(args.model_name, encoder,
                                                                       sources, lengths, image_features)
-    decoder_input = torch.LongTensor([[tgt_vocab('<start>') for _ in range(batch_size)]])  ## size = (1, batch)
+    decoder_input = torch.LongTensor([[tgt_vocab('<start>')] for _ in range(batch_size)])  ## size = (batch, 1)
     decoder_input = decoder_input.to(device)
     decoder_hidden = decoder.init_hidden(encoder_outputs,  encoder_hidden)
     use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
@@ -73,22 +73,22 @@ def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
         for t in range(max_target_len):
             decoder_output, decoder_hidden = decoder_forward(args, decoder, decoder_input, decoder_hidden,
                                                              encoder_outputs, image_features)
-            decoder_input = targets[t].view(1, -1)  ## 对于teacher_forcing情形，下一个cell的输入从ground truth中获得
-            masked_loss, nTotal = maskedNLLLoss(decoder_output, targets[t], mask[t])
+            decoder_input = targets[t].view(-1, 1)  ## 对于teacher_forcing情形，下一个cell的输入从ground truth中获得
+            masked_loss, nTotal = maskedNLLLoss(decoder_output, targets[:, t], mask[:, t])
             loss += masked_loss
             print_losses.append(masked_loss.item() * nTotal)
             n_totals += nTotal
     else:
         for t in range(max_target_len):
-            decoder_output, decoder_hidden = decoder_forward(decoder_input, decoder_hidden,
+            decoder_output, decoder_hidden = decoder_forward(args, decoder, decoder_input, decoder_hidden,
                                                              encoder_outputs, image_features)
 
             # No teacher forcing: next input is decoder's own current output
             _, topi = decoder_output.topk(1)
-            decoder_input = torch.LongTensor([[topi[i][0] for i in range(batch_size)]])
+            decoder_input = torch.LongTensor([[topi[i][0]] for i in range(batch_size)])
             decoder_input = decoder_input.to(device)
             # Calculate and accumulate loss
-            mask_loss, nTotal = maskedNLLLoss(decoder_output, targets[t], mask[t])
+            mask_loss, nTotal = maskedNLLLoss(decoder_output, targets[:, t], mask[:, t])
             loss += mask_loss
             print_losses.append(mask_loss.item() * nTotal)
             n_totals += nTotal
@@ -136,29 +136,28 @@ def validate(sources, targets, lengths, mask, encoder, decoder, encoder_optimize
     # 前向传播
     encoder_outputs, encoder_hidden, image_features = encoder_forward(args.model_name, encoder,
                                                                       sources, lengths, image_features)
-    decoder_input = torch.LongTensor([[tgt_vocab('<start>') for _ in range(batch_size)]])  ## size = (1, batch)
+    decoder_input = torch.LongTensor([[tgt_vocab('<start>')] for _ in range(batch_size)])  ## size = (batch, 1)
     decoder_input = decoder_input.to(device)
     decoder_hidden = decoder.init_hidden(encoder_outputs, encoder_hidden)
-    batch_result = torch.zeros((max_target_len, batch_size))
+    batch_result = torch.zeros((batch_size, max_target_len))
 
     # Decoder逐步向前传播
     for t in range(max_target_len):
-        pri
-        decoder_output, decoder_hidden = decoder_forward(decoder_input, decoder_hidden,
+        decoder_output, decoder_hidden = decoder_forward(args, decoder, decoder_input, decoder_hidden,
                                                          encoder_outputs, image_features)
 
         # No teacher forcing: next input is decoder's own current output
         _, topi = decoder_output.topk(1)
-        decoder_input = torch.LongTensor([[topi[i][0] for i in range(batch_size)]])  ## size = (1,batch)
+        decoder_input = torch.LongTensor([[topi[i][0]] for i in range(batch_size)])  ## size = (batch,1)
         decoder_input = decoder_input.to(device)
         batch_result[t] = decoder_input
         # Calculate and accumulate loss
-        mask_loss, nTotal = maskedNLLLoss(decoder_output, targets[t], mask[t])
+        mask_loss, nTotal = maskedNLLLoss(decoder_output, targets[:, t], mask[:, t])
         loss += mask_loss
         print_losses.append(mask_loss.item() * nTotal)
         n_totals += nTotal
 
-    return sum(print_losses) / n_totals, batch_result.transpose(0,1)
+    return sum(print_losses) / n_totals, batch_result
 
 
 def train_iters(encoder, decoder, encoder_optimizer, decoder_optimizer, src_embedding,tgt_embedding,

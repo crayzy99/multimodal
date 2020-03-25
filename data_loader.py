@@ -101,9 +101,6 @@ def collate_fn(data):
     targets_tensor = targets_tensor[src_index]
 
     mask = targets_tensor.ne(0)
-    sources_tensor = sources_tensor.transpose(0,1)
-    targets_tensor = targets_tensor.transpose(0,1)
-    mask = mask.transpose(0,1)
 
     image_features = torch.stack(image_features, dim=0)  ## size = (batch, image_feature_size)
     image_features = image_features[src_index]
