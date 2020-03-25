@@ -84,13 +84,14 @@ def encoder_forward(model_name, encoder, sources, lengths, image_features):
     return encoder_outputs, encoder_hidden, image_features
 
 
-def decoder_forward(decoder_input, decoder_hidden, encoder_outputs,
+def decoder_forward(args, decoder, decoder_input, decoder_hidden, encoder_outputs,
         image_features):
     if args.model_name == 'TEXT':
         decoder_output, decoder_hidden = decoder(
             decoder_input, decoder_hidden, encoder_outputs
         )
     elif args.model_name == 'DIRECT':
+        print("encoder:", encoder_outputs)
         decoder_output, decoder_hidden = decoder(
             decoder_input, decoder_hidden, encoder_outputs, image_features
         )

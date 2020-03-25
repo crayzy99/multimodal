@@ -7,6 +7,9 @@ from operator import itemgetter
 import torch.nn.functional as F
 
 
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
 class EncoderGRU(nn.Module):
     ## 一个简单的LSTM模型
     ## 可能的改进方向：加入BPE或者german compound word splitting.
@@ -78,10 +81,10 @@ class DIRECTEncoder(nn.Module):
         packed = nn.utils.rnn.pack_padded_sequence(embedded, src_lengths)
         outputs, hidden = self.gru(packed, hidden)
         outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs)
-        outputs = torch.cat(outputs[:, :, :self.hidden_size], outputs[:, : ,self.hidden_size:], dim=2)
+        outputs = torch.cat([outputs[:, :, :self.hidden_size], outputs[:, : ,self.hidden_size:]], dim=2)
         outputs = self.output_dropout(outputs)
-        image_features = self.W_im(image_features.view(196, -1))
-
+        
+        image_features = self.W_im(image_features.view(image_features.shape[0], image_features.shape[1],1024))
         return outputs, hidden, image_features
 
 
@@ -109,6 +112,9 @@ class LuongAttention(nn.Module):
 
     def general_score(self, hidden, encoder_output):
         energy = self.attn(encoder_output)
+        print("encoder_output:", encoder_output.shape)
+        print("energe:", energy.shape)
+        print("hidden:", hidden.shape)
         return torch.sum(hidden * energy, dim=2)
 
     def concat_score(self, hidden, encoder_output):
@@ -205,8 +211,11 @@ class DIRECTDecoder(nn.Module):
 
     def init_hidden(self, encoder_outputs, encoder_hidden):
         hidden_1 = F.tanh(self.W_init(torch.mean(encoder_outputs, dim=0)))
-        hidden_2 = torch.zeros(encoder_outputs.shape[0], encoder_outputs.shape[1], self.hidden_size)
-        return torch.cat([hidden_1, hidden_2], dim=2)
+        hidden_2 = torch.zeros(encoder_outputs.shape[1], self.hidden_size)
+        hidden_1 = hidden_1.to(device)
+        hidden_2 = hidden_2.to(device)
+        hidden = torch.cat([hidden_1, hidden_2], dim=1).unsqueeze(0)
+        return hidden
 
     def forward(self, input, last_hidden, encoder_outputs, image_features):
         '''
@@ -219,19 +228,19 @@ class DIRECTDecoder(nn.Module):
         #embedded = self.embedding_dropout(embedded)
         hidden_1 = last_hidden[:,:,:self.hidden_size]
         hidden_2 = last_hidden[:,:,self.hidden_size:]
+        hidden_1 = hidden_1.contiguous()
         output_1, hidden_1 = self.gru_1(embedded, hidden_1)  ## output: size = (1, batch, hidden_size)
         text_attn_weights = self.text_attention(output_1, encoder_outputs)
         img_attn_weights = self.img_attention(output_1, image_features)
         text_context = text_attn_weights.bmm(encoder_outputs.transpose(0, 1))  ## size = (batch, 1, 2*hidden)
-        img_context = img_attn_weights.bmm(image_features.transpose(0,1))  ## size = (batch, 1, 2*hidden)
+
+        img_context = img_attn_weights.bmm(image_features)  ## size = (batch, 1, 2*hidden)
         context = F.tanh(self.W_fus(torch.cat([text_context, img_context], dim=2)))
         output_2, hidden_2 = self.gru_2(context, hidden_2)   ## output: size = (1, batch, hidden_size)
         output_2 = output_2.squeeze(0)  ## size = (batch, hidden_size)
         context = context.squeeze(1)  ## size = (batch, 2*hidden)
         output = F.softmax(self.L_o(F.tanh(self.L_s(output_2)+self.L_c(context)+embedded)))
         hidden = torch.cat([hidden_1, hidden_2], dim=2)
-
-        return output, hidden
 
 
 class GreedySearchDecoder(nn.Module):

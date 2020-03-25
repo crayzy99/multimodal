@@ -60,6 +60,7 @@ def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
     n_totals = 0
 
     # 前向传播
+
     encoder_outputs, encoder_hidden, image_features = encoder_forward(args.model_name, encoder,
                                                                       sources, lengths, image_features)
     decoder_input = torch.LongTensor([[tgt_vocab('<start>') for _ in range(batch_size)]])  ## size = (1, batch)
@@ -70,7 +71,7 @@ def train(sources, targets, lengths, mask, encoder, decoder, encoder_optimizer,
     # Decoder逐步向前传播
     if use_teacher_forcing:
         for t in range(max_target_len):
-            decoder_output, decoder_hidden = decoder_forward(decoder_input, decoder_hidden,
+            decoder_output, decoder_hidden = decoder_forward(args, decoder, decoder_input, decoder_hidden,
                                                              encoder_outputs, image_features)
             decoder_input = targets[t].view(1, -1)  ## 对于teacher_forcing情形，下一个cell的输入从ground truth中获得
             masked_loss, nTotal = maskedNLLLoss(decoder_output, targets[t], mask[t])
@@ -142,6 +143,7 @@ def validate(sources, targets, lengths, mask, encoder, decoder, encoder_optimize
 
     # Decoder逐步向前传播
     for t in range(max_target_len):
+        pri
         decoder_output, decoder_hidden = decoder_forward(decoder_input, decoder_hidden,
                                                          encoder_outputs, image_features)
 
@@ -307,12 +309,12 @@ def main(args):
         tgt_embedding.load_state_dict(tgt_embedding_sd)
     encoder, decoder = get_model(args, src_vocab, tgt_vocab, src_embedding, tgt_embedding)
 
-    ############## New code 3.14 ##############
-    if torch.cuda.device_count() > 1:
-        print("Let's use", torch.cuda.device_count(), "GPUs!")
-        encoder = nn.DataParallel(encoder)
-        decoder = nn.DataParallel(decoder)
-    ############## New code end  ##############
+#    ############## New code 3.14 ##############
+#    if torch.cuda.device_count() > 1:
+#        print("Let's use", torch.cuda.device_count(), "GPUs!")
+#        encoder = nn.DataParallel(encoder)
+#        decoder = nn.DataParallel(decoder)
+#    ############## New code end  ##############
 
     if args.file_name:
         encoder.load_state_dict(encoder_sd)
